@@ -1,0 +1,31 @@
+# mlb-api dependencies
+# Install with: pip install -r requirements.txt
+# Or with a virtual env: python -m venv venv && source venv/bin/activate && pip install -r requirements.txt
+
+# Web framework
+fastapi>=0.109.0
+uvicorn[standard]>=0.27.0
+
+# HTTP client (like axios for Python)
+httpx>=0.26.0
+
+# Database
+sqlalchemy[asyncio]>=2.0.25
+asyncpg>=0.29.0  # Async Postgres driver
+greenlet>=3.0.0  # Required for SQLAlchemy async
+
+# Settings and validation
+pydantic>=2.5.0
+pydantic-settings>=2.1.0
+python-dotenv>=1.0.0
+
+# AI
+anthropic>=0.18.0
+
+# Math/stats (for sabermetrics)
+numpy>=1.26.0
+
+# Development
+pytest>=7.4.0
+pytest-asyncio>=0.23.0
+httpx  # For test client
