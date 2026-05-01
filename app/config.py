@@ -24,6 +24,7 @@ class Settings(BaseSettings):
     # External APIs
     anthropic_api_key: str
     mlb_stats_api_base_url: str = "https://statsapi.mlb.com/api/v1"
+    mlb_stats_api_live_url: str = "https://ws.statsapi.mlb.com/api/v1.1"
     
     # App settings
     debug: bool = False

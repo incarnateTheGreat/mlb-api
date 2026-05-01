@@ -173,6 +173,7 @@ async def get_game_summary(
 
 @router.get("/schedule")
 async def get_schedule(
+    time_zone: str,
     date: Optional[date_type] = Query(
         default=None,
         description="Date in YYYY-MM-DD format (defaults to today)",
@@ -182,15 +183,14 @@ async def get_schedule(
         description="Filter by team ID",
     ),
     mlb_client: MLBStatsClient = Depends(get_mlb_client),
-) -> list[dict]:
+) -> dict:
     """
     Get the game schedule for a specific date.
     
-    This is a passthrough to the MLB API schedule endpoint,
-    useful for building schedule views in the frontend.
+    Returns the full MLB API schedule response.
     """
     try:
-        return await mlb_client.get_schedule(date=date, team_id=team_id)
+        return await mlb_client.get_schedule(date=date, team_id=team_id, time_zone=time_zone)
     except Exception as e:
         raise HTTPException(
             status_code=500,

@@ -32,35 +32,62 @@ class MLBStatsClient:
     This wraps the raw API calls and transforms responses into
     our Pydantic models — similar to how you might wrap fetch
     with a typed API client in TypeScript.
+    
+    Uses two base URLs:
+    - v1 (statsapi.mlb.com) for schedule, players, etc.
+    - v1.1 (ws.statsapi.mlb.com) for live game data and boxscores
     """
     
     def __init__(self) -> None:
-        self.base_url = get_settings().mlb_stats_api_base_url
-        self._client: Optional[httpx.AsyncClient] = None
+        settings = get_settings()
+        self.base_url = settings.mlb_stats_api_base_url  # v1 API
+        self.live_url = settings.mlb_stats_api_live_url  # v1.1 API
+        self._client_v1: Optional[httpx.AsyncClient] = None
+        self._client_live: Optional[httpx.AsyncClient] = None
     
-    async def _get_client(self) -> httpx.AsyncClient:
-        """Lazily create and return the HTTP client."""
-        if self._client is None or self._client.is_closed:
-            self._client = httpx.AsyncClient(
+    async def _get_client_v1(self) -> httpx.AsyncClient:
+        """Get client for v1 API (schedule, players, etc.)."""
+        if self._client_v1 is None or self._client_v1.is_closed:
+            self._client_v1 = httpx.AsyncClient(
                 base_url=self.base_url,
                 timeout=30.0,
                 headers={"User-Agent": "mlb-api/1.0"},
-                verify=False,  # Bypass SSL verification (corporate proxy/VPN workaround)
+                verify=False,
             )
-
-        return self._client
+        return self._client_v1
+    
+    async def _get_client_live(self) -> httpx.AsyncClient:
+        """Get client for v1.1 API (live game data, boxscores)."""
+        if self._client_live is None or self._client_live.is_closed:
+            self._client_live = httpx.AsyncClient(
+                base_url=self.live_url,
+                timeout=30.0,
+                headers={"User-Agent": "mlb-api/1.0"},
+                verify=False,
+            )
+        return self._client_live
     
     async def close(self) -> None:
-        """Close the HTTP client connection pool."""
-        if self._client is not None:
-            await self._client.aclose()
-            self._client = None
+        """Close all HTTP client connections."""
+        if self._client_v1 is not None:
+            await self._client_v1.aclose()
+            self._client_v1 = None
+        if self._client_live is not None:
+            await self._client_live.aclose()
+            self._client_live = None
     
     async def _get(self, endpoint: str, params: Optional[dict] = None) -> dict[str, Any]:
-        """Make a GET request to the MLB Stats API."""
-        client = await self._get_client()
+        """Make a GET request to the v1 MLB Stats API."""
+        client = await self._get_client_v1()
         response = await client.get(endpoint, params=params)
-        response.raise_for_status()  # Raises HTTPStatusError on 4xx/5xx
+        response.raise_for_status()
+        return response.json()
+    
+    async def _get_live(self, endpoint: str, params: Optional[dict] = None) -> dict[str, Any]:
+        """Make a GET request to the v1.1 MLB Stats API (live data)."""
+        client = await self._get_client_live()
+        response = await client.get(endpoint, params=params)
+        response.raise_for_status()
         return response.json()
     
     # =========================================================================
@@ -73,22 +100,19 @@ class MLBStatsClient:
         
         The MLB API returns deeply nested data — we flatten and normalize
         it into our clean Pydantic models here.
+        
+        Uses v1.1 API (ws.statsapi.mlb.com) for live game data.
         """
-        # Fetch boxscore and linescore in parallel
-        # In Python, we use asyncio.gather() — similar to Promise.all()
-        import asyncio
-        
-        boxscore_task = self._get(f"/game/{game_id}/boxscore")
-        linescore_task = self._get(f"/game/{game_id}/linescore")
-        feed_task = self._get(f"/game/{game_id}/feed/live")
-        
-        boxscore_data, linescore_data, feed_data = await asyncio.gather(
-            boxscore_task, linescore_task, feed_task
-        )
+        # Fetch the live feed which contains all game data
+        feed_data = await self._get_live(f"/game/{game_id}/feed/live")
         
         # Parse game info from feed
         game_data = feed_data.get("gameData", {})
         live_data = feed_data.get("liveData", {})
+        
+        # Extract linescore and boxscore from live data
+        linescore_data = live_data.get("linescore", {})
+        boxscore_data = live_data.get("boxscore", {})
         
         # Extract team info
         teams = game_data.get("teams", {})
@@ -227,25 +251,32 @@ class MLBStatsClient:
     
     async def get_schedule(
         self, 
+        time_zone: str,
         date: Optional[date] = None,
         team_id: Optional[int] = None,
-    ) -> list[dict[str, Any]]:
-        """Fetch game schedule for a date and/or team."""
-        params = {"sportId": 1}  # MLB
+    ) -> dict[str, Any]:
+        """Fetch game schedule for a date and/or team. Returns the full API response."""
+        params = {
+            "sportId": [1, 51, 21],
+            "gameType": ["E", "S", "R", "F", "D", "L", "W", "A", "C"],
+            "leagueId": [104, 103, 160, 590],
+            "language": "en",
+            "hydrate": "team,linescore(matchup,runners),xrefId,story,flags,statusFlags,broadcasts(all),venue(location),decisions,person,probablePitcher,stats,game(content(media(epg),summary),tickets),seriesStatus(useOverride=true)",
+            "sortBy": "gameDate,gameStatus,gameType",
+        }
+
+        params["timeZone"] = time_zone
         
         if date:
-            params["date"] = date.isoformat()
+            date_str = date.isoformat()
+            params["startDate"] = date_str
+            params["endDate"] = date_str
         if team_id:
             params["teamId"] = team_id
             
         data = await self._get("/schedule", params=params)
         
-        # Flatten the nested dates/games structure
-        games = []
-        for date_entry in data.get("dates", []):
-            games.extend(date_entry.get("games", []))
-        
-        return games
+        return data
     
     # =========================================================================
     # Player endpoints
@@ -325,6 +356,4 @@ def get_mlb_client() -> MLBStatsClient:
     global _mlb_client
     if _mlb_client is None:
         _mlb_client = MLBStatsClient()
-
-        _mlb_client.base_url
     return _mlb_client
