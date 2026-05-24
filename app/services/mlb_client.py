@@ -21,6 +21,11 @@ from app.models.game import (
     Pitcher, 
     TeamInfo, 
     TopPerformer,
+    GameContent,
+    GameVideo,
+    GameArticle,
+    VideoPlayback,
+    VideoTag,
 )
 from app.models.player import PlayerBio, BattingStats, PitchingStats
 
@@ -42,8 +47,10 @@ class MLBStatsClient:
         settings = get_settings()
         self.base_url = settings.mlb_stats_api_base_url  # v1 API
         self.live_url = settings.mlb_stats_api_live_url  # v1.1 API
+        self.graphql_url = "https://data-graph.mlb.com/graphql/"  # GraphQL API
         self._client_v1: Optional[httpx.AsyncClient] = None
         self._client_live: Optional[httpx.AsyncClient] = None
+        self._client_graphql: Optional[httpx.AsyncClient] = None
     
     async def _get_client_v1(self) -> httpx.AsyncClient:
         """Get client for v1 API (schedule, players, etc.)."""
@@ -67,6 +74,20 @@ class MLBStatsClient:
             )
         return self._client_live
     
+    async def _get_client_graphql(self) -> httpx.AsyncClient:
+        """Get client for MLB GraphQL API (content, videos, articles)."""
+        if self._client_graphql is None or self._client_graphql.is_closed:
+            self._client_graphql = httpx.AsyncClient(
+                base_url=self.graphql_url,
+                timeout=30.0,
+                headers={
+                    "User-Agent": "mlb-api/1.0",
+                    "Apollo-Require-Preflight": "true",
+                },
+                verify=False,
+            )
+        return self._client_graphql
+    
     async def close(self) -> None:
         """Close all HTTP client connections."""
         if self._client_v1 is not None:
@@ -75,6 +96,9 @@ class MLBStatsClient:
         if self._client_live is not None:
             await self._client_live.aclose()
             self._client_live = None
+        if self._client_graphql is not None:
+            await self._client_graphql.aclose()
+            self._client_graphql = None
     
     async def _get(self, endpoint: str, params: Optional[dict] = None) -> dict[str, Any]:
         """Make a GET request to the v1 MLB Stats API."""
@@ -90,9 +114,19 @@ class MLBStatsClient:
         response.raise_for_status()
         return response.json()
     
+    
+    
     # =========================================================================
     # Game endpoints
     # =========================================================================
+    
+    async def get_game_feed(self, game_id: int) -> dict[str, Any]:
+        """
+        Fetch raw live feed data for a game.
+        
+        Returns the full unprocessed JSON from the MLB v1.1 API.
+        """
+        return await self._get_live(f"/game/{game_id}/feed/live", params={"language": "en"})
     
     async def get_game_boxscore(self, game_id: int) -> GameBoxscore:
         """
@@ -278,6 +312,23 @@ class MLBStatsClient:
         
         return data
     
+    async def get_game_details(self, game_id: int) -> dict[str, Any]:
+        """
+        Fetch detailed schedule data for a specific game.
+        
+        Returns lineups, broadcasts, probable pitchers, tickets, etc.
+        This is the schedule endpoint filtered to a single game.
+        """
+        params = {
+            "gamePk": game_id,
+            "language": "en",
+            "hydrate": "story,xrefId,lineups,broadcasts(all),probablePitcher(note),game(content(media(epg)),tickets)",
+            "useLatestGames": "true",
+            "fields": "dates,games,teams,probablePitcher,note,id,dates,games,broadcasts,type,name,homeAway,language,isNational,callSign,mediaState,mediaStateCode,availableForStreaming,freeGame,mediaId,dates,games,game,tickets,ticketType,ticketLinks,dates,games,content,media,epg,dates,games,lineups,homePlayers,awayPlayers,useName,lastName,primaryPosition,abbreviation,dates,games,xrefIds,xrefId,xrefType,story,seriesStatus(useOverride=true)",
+        }
+        
+        return await self._get("/schedule", params=params)
+    
     # =========================================================================
     # Player endpoints
     # =========================================================================
@@ -340,6 +391,187 @@ class MLBStatsClient:
             return {}
         
         return splits[0].get("stat", {})
+
+    # =========================================================================
+    # Content endpoints (GraphQL)
+    # =========================================================================
+
+    async def get_game_content(self, game_id: int) -> GameContent:
+        """
+        Fetch rich content (videos, articles) for a game via GraphQL.
+        
+        This calls MLB's data-graph.mlb.com GraphQL endpoint to get:
+        - Video highlights
+        - Recap article
+        - Related articles
+        """
+        query = """
+        query getGamesByGamePks(
+            $gamePks: [Int],
+            $locale: Language,
+            $gameRecapTags: [String]!,
+            $relatedArticleTags: [String]!,
+            $contentSource: ContentSource
+        ) {
+            getGamesByGamePks(gamePks: $gamePks) {
+                gamePk
+                gameDate
+                content {
+                    videoContent(locale: $locale) {
+                        headline
+                        duration
+                        title
+                        description
+                        slug
+                        blurb
+                        guid: playGuid
+                        contentDate
+                        preferredPlaybackScenarioURL(preferredPlaybacks: ["hlsCloud", "mp4Avc"])
+                        playbacks: playbackScenarios {
+                            name: playback
+                            url: location
+                        }
+                        thumbnail {
+                            templateUrl
+                        }
+                        tags {
+                            ... on GameTag {
+                                slug
+                                type
+                                title
+                            }
+                            ... on TaxonomyTag {
+                                slug
+                                type
+                                title
+                            }
+                            ... on InternalTag {
+                                slug
+                                type
+                                title
+                            }
+                        }
+                    }
+                    ... on GameContent {
+                        recapArticle: articleContent(
+                            locale: $locale,
+                            tags: $gameRecapTags,
+                            limit: 1,
+                            contentSource: $contentSource
+                        ) {
+                            contentDate
+                            description
+                            headline
+                            slug
+                            blurb: summary
+                            templateUrl: thumbnail
+                            type
+                        }
+                        relatedArticles: articleContent(
+                            locale: $locale,
+                            tags: $relatedArticleTags,
+                            excludeTags: $gameRecapTags,
+                            limit: 5
+                        ) {
+                            contentDate
+                            description
+                            headline
+                            slug
+                            blurb: summary
+                            templateUrl: thumbnail
+                            type
+                        }
+                    }
+                }
+            }
+        }
+        """
+        
+        variables = {
+            "gamePks": [game_id],
+            "locale": "EN_US",
+            "gameRecapTags": ["game-recap"],
+            "relatedArticleTags": ["storytype-article"],
+            "contentSource": "MLB",
+        }
+        
+        client = await self._get_client_graphql()
+        response = await client.post(
+            "",
+            json={
+                "operationName": "getGamesByGamePks",
+                "query": query,
+                "variables": variables,
+            },
+        )
+        response.raise_for_status()
+        data = response.json()
+        
+        # Parse the response
+        games = data.get("data", {}).get("getGamesByGamePks", [])
+        if not games:
+            return GameContent(game_pk=game_id)
+        
+        game = games[0]
+        content = game.get("content", {}) or {}
+        
+        # Parse videos
+        videos = []
+        for v in content.get("videoContent", []) or []:
+            videos.append(GameVideo(
+                headline=v.get("headline"),
+                title=v.get("title"),
+                description=v.get("description"),
+                duration=v.get("duration"),
+                slug=v.get("slug", ""),
+                guid=v.get("guid"),
+                blurb=v.get("blurb"),
+                content_date=v.get("contentDate"),
+                thumbnail_url=v.get("thumbnail", {}).get("templateUrl") if v.get("thumbnail") else None,
+                preferred_playback_url=v.get("preferredPlaybackScenarioURL"),
+                playbacks=[
+                    VideoPlayback(name=p.get("name", ""), url=p.get("url", ""))
+                    for p in (v.get("playbacks") or [])
+                ],
+                tags=[
+                    VideoTag(slug=t.get("slug"), type=t.get("type"), title=t.get("title"))
+                    for t in (v.get("tags") or [])
+                ],
+            ))
+        
+        # Parse recap article
+        recap_list = content.get("recapArticle") or []
+        recap_article = None
+        if recap_list:
+            r = recap_list[0]
+            recap_article = GameArticle(
+                headline=r.get("headline"),
+                description=r.get("description"),
+                slug=r.get("slug", ""),
+                blurb=r.get("blurb"),
+                thumbnail_url=r.get("templateUrl"),
+                content_date=r.get("contentDate"),
+                type=r.get("type"),
+            )
+        
+        # Parse related articles
+        related_articles = []
+        for a in content.get("relatedArticles", []) or []:
+            related_articles.append(GameArticle(
+                headline=a.get("headline"),
+                description=a.get("description"),
+                slug=a.get("slug", ""),
+                blurb=a.get("blurb"),
+                thumbnail_url=a.get("templateUrl"),
+                content_date=a.get("contentDate"),
+                type=a.get("type"),
+            ))
+        
+        return GameContent(
+            videoContent=videos,
+            recap_article=recap_article,
+            related_articles=related_articles,
+        )
 
 
 # Singleton instance for dependency injection

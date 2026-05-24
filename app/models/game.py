@@ -107,3 +107,48 @@ class GameSummaryRequest(BaseModel):
     include_key_moments: bool = True
     include_player_analysis: bool = True
     regenerate: bool = False  # Force regeneration even if cached
+
+class VideoPlayback(BaseModel):
+    """A single video playback option (HLS, MP4, etc.)."""
+    name: str
+    url: str
+
+
+class VideoTag(BaseModel):
+    """Tag metadata for video content."""
+    slug: Optional[str] = None
+    type: Optional[str] = None
+    title: Optional[str] = None
+
+
+class GameVideo(BaseModel):
+    """Video highlight from MLB content."""
+    headline: Optional[str] = None
+    title: Optional[str] = None
+    description: Optional[str] = None
+    duration: Optional[str] = None
+    slug: str
+    guid: Optional[str] = None
+    blurb: Optional[str] = None
+    content_date: Optional[str] = None
+    thumbnail_url: Optional[str] = None
+    preferred_playback_url: Optional[str] = None
+    playbacks: list[VideoPlayback] = Field(default_factory=list)
+    tags: list[VideoTag] = Field(default_factory=list)
+class GameArticle(BaseModel):
+    """Article content (recap or related)."""
+    headline: Optional[str] = None
+    description: Optional[str] = None
+    slug: str
+    blurb: Optional[str] = None
+    thumbnail_url: Optional[str] = None
+    content_date: Optional[str] = None
+    type: Optional[str] = None
+class GameContent(BaseModel):
+    """
+    Rich content for a game from MLB's GraphQL API.
+    Includes videos, recap articles, and related articles.
+    """
+    videoContent: list[GameVideo] = Field(default_factory=list)
+    recap_article: Optional[GameArticle] = None
+    related_articles: list[GameArticle] = Field(default_factory=list)

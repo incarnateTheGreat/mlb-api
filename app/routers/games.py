@@ -28,9 +28,29 @@ from app.services.cache_service import (
     cache_game_summary,
     CacheService,
 )
-
+from app.models.game import GameBoxscore, GameSummary, GameSummaryRequest, GameContent
 
 router = APIRouter()
+
+
+@router.get("/{game_id}/feed")
+async def get_game_feed(
+    game_id: int,
+    mlb_client: MLBStatsClient = Depends(get_mlb_client),
+) -> dict:
+    """
+    Fetch raw live feed data for a game.
+    
+    Returns the full unprocessed JSON from the MLB v1.1 API.
+    This is the same data as /boxscore but without any transformation.
+    """
+    try:
+        return await mlb_client.get_game_feed(game_id)
+    except Exception as e:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Game {game_id} not found or error fetching data: {str(e)}",
+        )
 
 
 @router.get("/{game_id}/boxscore", response_model=GameBoxscore)
@@ -195,4 +215,43 @@ async def get_schedule(
         raise HTTPException(
             status_code=500,
             detail=f"Failed to fetch schedule: {str(e)}",
+        )
+
+@router.get("/{game_id}/details")
+async def get_game_details(
+    game_id: int,
+    mlb_client: MLBStatsClient = Depends(get_mlb_client),
+) -> dict:
+    """
+    Fetch detailed schedule data for a specific game.
+    
+    Returns lineups, broadcasts, probable pitchers, tickets, and more.
+    This is the schedule endpoint filtered to a single gamePk.
+    """
+    try:
+        return await mlb_client.get_game_details(game_id)
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to fetch details for game {game_id}: {str(e)}",
+        )
+
+
+@router.get("/{game_id}/content", response_model=GameContent)
+async def get_game_content(
+    game_id: int,
+    mlb_client: MLBStatsClient = Depends(get_mlb_client),
+) -> GameContent:
+    """
+    Fetch rich content for a game (videos, articles).
+    
+    Returns video highlights, the official recap article,
+    and related articles from MLB's content API.
+    """
+    try:
+        return await mlb_client.get_game_content(game_id)
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to fetch content for game {game_id}: {str(e)}",
         )
