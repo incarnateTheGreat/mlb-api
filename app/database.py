@@ -56,20 +56,37 @@ def get_database_url() -> str:
     return urlunparse(new_parsed)
 
 
-engine = create_async_engine(
-    get_database_url(),
-    echo=get_settings().debug,  # Log SQL queries in debug mode
-    pool_pre_ping=True,  # Verify connections before using (important for serverless DBs)
-    connect_args={"ssl": True},  # Enable SSL for Neon
-)
+# Lazy initialization — engine is created on first access, not at import time
+# This allows tests to import the module without needing a valid DATABASE_URL
+_engine = None
+_async_session_maker = None
 
-# Session factory — creates new sessions for each request
-# expire_on_commit=False keeps objects accessible after commit (like Prisma's behavior)
-async_session_maker = async_sessionmaker(
-    engine,
-    class_=AsyncSession,
-    expire_on_commit=False,
-)
+
+def get_engine():
+    """Get or create the async database engine."""
+    global _engine
+    if _engine is None:
+        _engine = create_async_engine(
+            get_database_url(),
+            echo=get_settings().debug,  # Log SQL queries in debug mode
+            pool_pre_ping=True,  # Verify connections before using (important for serverless DBs)
+            connect_args={"ssl": True},  # Enable SSL for Neon
+        )
+    return _engine
+
+
+def get_session_maker():
+    """Get or create the async session factory."""
+    global _async_session_maker
+    if _async_session_maker is None:
+        # Session factory — creates new sessions for each request
+        # expire_on_commit=False keeps objects accessible after commit (like Prisma's behavior)
+        _async_session_maker = async_sessionmaker(
+            get_engine(),
+            class_=AsyncSession,
+            expire_on_commit=False,
+        )
+    return _async_session_maker
 
 
 class Base(DeclarativeBase):
@@ -90,7 +107,8 @@ async def get_db() -> AsyncGenerator[AsyncSession, None]:
         async def get_items(db: AsyncSession = Depends(get_db)):
             ...
     """
-    async with async_session_maker() as session:
+    session_maker = get_session_maker()
+    async with session_maker() as session:
         try:
             yield session
             await session.commit()
@@ -106,10 +124,12 @@ async def init_db() -> None:
     Initialize database tables.
     Call this on app startup to ensure cache tables exist.
     """
+    engine = get_engine()
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
 
 
 async def close_db() -> None:
     """Close database connections on shutdown."""
+    engine = get_engine()
     await engine.dispose()
