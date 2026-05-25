@@ -221,6 +221,29 @@ async def get_schedule(
         )
 
 
+@router.get("/schedule/raw")
+async def get_schedule_raw(
+    time_zone: str,
+    date: Optional[date_type] = Query(
+        default=None,
+        description="Date in YYYY-MM-DD format (defaults to today)",
+    ),
+    mlb_client: MLBStatsClient = Depends(get_mlb_client),
+) -> dict:
+    """
+    Get raw MLB API schedule response without processing.
+    
+    Returns the full dates/games structure directly from MLB API.
+    """
+    try:
+        return await mlb_client.get_schedule(date=date, team_id=None, time_zone=time_zone)
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to fetch schedule: {str(e)}",
+        )
+
+
 @router.get("/schedule/range")
 async def get_schedule_range(
     start_date: date_type = Query(

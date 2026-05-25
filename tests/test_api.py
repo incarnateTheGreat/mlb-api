@@ -48,6 +48,20 @@ class TestScheduleEndpoint:
 
 
 # =============================================================================
+# Schedule raw endpoint tests
+# =============================================================================
+
+class TestScheduleRawEndpoint:
+    """Tests for /games/schedule/raw endpoint."""
+    
+    def test_schedule_raw_missing_timezone(self):
+        """Should return 422 when timezone is missing."""
+        response = client.get("/games/schedule/raw")
+        
+        assert response.status_code == 422  # Validation error
+
+
+# =============================================================================
 # Schedule range endpoint tests
 # =============================================================================
 
