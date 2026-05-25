@@ -28,5 +28,8 @@ jobs:
               run: |
                   pytest tests/ -v -m "not integration" --tb=short
               env:
-                  # Disable SSL verification for MLB API calls in tests
+                  # Required config (dummy values for testing)
+                  DATABASE_URL: "postgresql://test:test@localhost:5432/test"
+                  ANTHROPIC_API_KEY: "sk-test-dummy-key-for-ci"
+                  # Disable SSL verification warnings
                   PYTHONWARNINGS: "ignore:Unverified HTTPS request"
