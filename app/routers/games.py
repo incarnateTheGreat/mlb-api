@@ -29,6 +29,7 @@ from app.services.cache_service import (
     CacheService,
 )
 from app.models.game import GameBoxscore, GameSummary, GameSummaryRequest, GameContent
+from app.utils import process_schedule_response
 
 router = APIRouter()
 
@@ -198,24 +199,65 @@ async def get_schedule(
         default=None,
         description="Date in YYYY-MM-DD format (defaults to today)",
     ),
-    team_id: Optional[int] = Query(
+    fav_team: Optional[int] = Query(
         default=None,
-        description="Filter by team ID",
+        description="Favorite team ID to prioritize in sorting",
     ),
     mlb_client: MLBStatsClient = Depends(get_mlb_client),
 ) -> dict:
     """
-    Get the game schedule for a specific date.
+    Get processed game schedule with AL/NL/WBC separation.
     
-    Returns the full MLB API schedule response.
+    Returns games grouped by league, sorted by favorite team,
+    plus metadata like postseason flag and completed game count.
     """
     try:
-        return await mlb_client.get_schedule(date=date, team_id=team_id, time_zone=time_zone)
+        raw_data = await mlb_client.get_schedule(date=date, team_id=None, time_zone=time_zone)
+        return process_schedule_response(raw_data, fav_team=fav_team)
     except Exception as e:
         raise HTTPException(
             status_code=500,
             detail=f"Failed to fetch schedule: {str(e)}",
         )
+
+
+@router.get("/schedule/range")
+async def get_schedule_range(
+    start_date: date_type = Query(
+        description="Start date in YYYY-MM-DD format",
+    ),
+    end_date: date_type = Query(
+        description="End date in YYYY-MM-DD format",
+    ),
+    time_zone: str = Query(
+        default="America/Toronto",
+        description="Timezone for game times",
+    ),
+    fields: Optional[str] = Query(
+        default="dates,date,games,gamePk",
+        description="Comma-separated fields to return (minimal by default)",
+    ),
+    mlb_client: MLBStatsClient = Depends(get_mlb_client),
+) -> dict:
+    """
+    Get schedule for a date range with minimal data.
+    
+    Returns raw MLB API response, useful for getting game IDs
+    across multiple days without heavy hydration.
+    """
+    try:
+        return await mlb_client.get_schedule_range(
+            start_date=start_date,
+            end_date=end_date,
+            time_zone=time_zone,
+            fields=fields,
+        )
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to fetch schedule range: {str(e)}",
+        )
+
 
 @router.get("/{game_id}/details")
 async def get_game_details(

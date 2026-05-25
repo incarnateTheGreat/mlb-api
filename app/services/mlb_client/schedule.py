@@ -53,3 +53,34 @@ class ScheduleMixin:
         }
         
         return await self._get("/schedule", params=params)
+    
+    async def get_schedule_range(
+        self,
+        start_date: date,
+        end_date: date,
+        time_zone: str = "America/Toronto",
+        fields: Optional[str] = None,
+    ) -> dict[str, Any]:
+        """
+        Fetch schedule for a date range with minimal data.
+        
+        Useful for getting game IDs across multiple days without
+        heavy hydration.
+        
+        Args:
+            start_date: Start of date range
+            end_date: End of date range  
+            time_zone: Timezone for game times
+            fields: Comma-separated field filter (e.g., "dates,date,games,gamePk")
+        """
+        params = {
+            "sportId": [1, 51, 21],
+            "startDate": start_date.isoformat(),
+            "endDate": end_date.isoformat(),
+            "timeZone": time_zone,
+        }
+        
+        if fields:
+            params["fields"] = fields
+        
+        return await self._get("/schedule", params=params)

@@ -25,7 +25,6 @@ from app.models.game import (
     GameVideo,
     GameArticle,
     VideoPlayback,
-    VideoTag,
 )
 from app.models.player import PlayerBio, BattingStats, PitchingStats
 
@@ -119,14 +118,6 @@ class MLBStatsClient:
     # =========================================================================
     # Game endpoints
     # =========================================================================
-    
-    async def get_game_feed(self, game_id: int) -> dict[str, Any]:
-        """
-        Fetch raw live feed data for a game.
-        
-        Returns the full unprocessed JSON from the MLB v1.1 API.
-        """
-        return await self._get_live(f"/game/{game_id}/feed/live", params={"language": "en"})
     
     async def get_game_boxscore(self, game_id: int) -> GameBoxscore:
         """
@@ -312,23 +303,6 @@ class MLBStatsClient:
         
         return data
     
-    async def get_game_details(self, game_id: int) -> dict[str, Any]:
-        """
-        Fetch detailed schedule data for a specific game.
-        
-        Returns lineups, broadcasts, probable pitchers, tickets, etc.
-        This is the schedule endpoint filtered to a single game.
-        """
-        params = {
-            "gamePk": game_id,
-            "language": "en",
-            "hydrate": "story,xrefId,lineups,broadcasts(all),probablePitcher(note),game(content(media(epg)),tickets)",
-            "useLatestGames": "true",
-            "fields": "dates,games,teams,probablePitcher,note,id,dates,games,broadcasts,type,name,homeAway,language,isNational,callSign,mediaState,mediaStateCode,availableForStreaming,freeGame,mediaId,dates,games,game,tickets,ticketType,ticketLinks,dates,games,content,media,epg,dates,games,lineups,homePlayers,awayPlayers,useName,lastName,primaryPosition,abbreviation,dates,games,xrefIds,xrefId,xrefType,story,seriesStatus(useOverride=true)",
-        }
-        
-        return await self._get("/schedule", params=params)
-    
     # =========================================================================
     # Player endpoints
     # =========================================================================
@@ -424,7 +398,6 @@ class MLBStatsClient:
                         description
                         slug
                         blurb
-                        guid: playGuid
                         contentDate
                         preferredPlaybackScenarioURL(preferredPlaybacks: ["hlsCloud", "mp4Avc"])
                         playbacks: playbackScenarios {
@@ -433,23 +406,6 @@ class MLBStatsClient:
                         }
                         thumbnail {
                             templateUrl
-                        }
-                        tags {
-                            ... on GameTag {
-                                slug
-                                type
-                                title
-                            }
-                            ... on TaxonomyTag {
-                                slug
-                                type
-                                title
-                            }
-                            ... on InternalTag {
-                                slug
-                                type
-                                title
-                            }
                         }
                     }
                     ... on GameContent {
@@ -524,7 +480,6 @@ class MLBStatsClient:
                 description=v.get("description"),
                 duration=v.get("duration"),
                 slug=v.get("slug", ""),
-                guid=v.get("guid"),
                 blurb=v.get("blurb"),
                 content_date=v.get("contentDate"),
                 thumbnail_url=v.get("thumbnail", {}).get("templateUrl") if v.get("thumbnail") else None,
@@ -532,10 +487,6 @@ class MLBStatsClient:
                 playbacks=[
                     VideoPlayback(name=p.get("name", ""), url=p.get("url", ""))
                     for p in (v.get("playbacks") or [])
-                ],
-                tags=[
-                    VideoTag(slug=t.get("slug"), type=t.get("type"), title=t.get("title"))
-                    for t in (v.get("tags") or [])
                 ],
             ))
         
@@ -568,7 +519,7 @@ class MLBStatsClient:
             ))
         
         return GameContent(
-            videoContent=videos,
+            videos=videos,
             recap_article=recap_article,
             related_articles=related_articles,
         )
