@@ -16,7 +16,7 @@ mlb-remix (Remix frontend) → mlb-api (this service) → MLB Stats API
 - **Player Stats**: Basic stats plus advanced sabermetrics (wOBA, wRC+, OPS+, FIP, etc.)
 - **Scouting Reports**: AI-generated player analysis
 - **Matchup Analysis**: Batter vs pitcher predictions
-- **Caching**: Postgres-backed cache to reduce API calls and AI generation costs
+- **Caching**: Two-tier caching (in-memory + Postgres) to reduce latency and API costs
 
 ## Quick Start
 
@@ -137,6 +137,36 @@ This project uses Neon Postgres for caching. Tables are created automatically on
 - `cached_responses`: Stores API responses and AI-generated content with TTL
 - `ai_generations`: Tracks AI generation metrics for analytics
 
+## Caching
+
+The service uses a two-tier caching strategy:
+
+### In-Memory Cache (TTLCache)
+
+Fast, per-instance caching for high-frequency MLB API data. Implemented in `app/services/memory_cache.py`.
+
+| Cache        | TTL    | Max Size | Use Case                       |
+| ------------ | ------ | -------- | ------------------------------ |
+| Game Feed    | 10 sec | 500      | Live game data (scores, plays) |
+| Game Content | 90 sec | 200      | Highlights and videos          |
+| Schedule     | 2 min  | 50       | Daily game schedules           |
+
+**Trade-offs:**
+
+- Fast (nanoseconds vs milliseconds)
+- Not persistent (lost on restart)
+- Per-instance (not shared across workers)
+
+### Postgres Cache (CacheService)
+
+Persistent caching for expensive-to-compute data. Implemented in `app/services/cache_service.py`.
+
+**Use for:**
+
+- AI-generated content (summaries, scouting reports)
+- Data that should survive restarts
+- Shared state across multiple workers
+
 ## Sabermetrics
 
 The service calculates advanced stats not provided by the MLB API:
@@ -198,7 +228,8 @@ mlb-api/
 │   │   ├── mlb_client.py    # MLB Stats API wrapper
 │   │   ├── ai_service.py    # Anthropic integration
 │   │   ├── sabermetrics.py  # Stat calculations
-│   │   └── cache_service.py # Postgres caching
+│   │   ├── cache_service.py # Postgres caching
+│   │   └── memory_cache.py  # In-memory TTL caching
 │   └── models/
 │       ├── game.py          # Game Pydantic models
 │       ├── player.py        # Player Pydantic models
