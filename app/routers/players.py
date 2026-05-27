@@ -134,3 +134,25 @@ async def get_scouting_report(
         "scouting_report": report,
         "metadata": metadata.model_dump(),
     }
+
+
+@router.get("/{player_id}/profile")
+async def get_player_profile(
+    player_id: int,
+    mlb_client: MLBStatsClient = Depends(get_mlb_client),
+) -> dict:
+    """
+    Get full player profile with career statistics.
+    
+    Returns comprehensive player data including:
+    - Biographical info (name, position, team, etc.)
+    - Year-by-year hitting and pitching stats
+    - Career regular season totals
+    
+    Returns an empty dict if player not found.
+    """
+    try:
+        profile = await mlb_client.get_player_profile(player_id)
+        return profile if profile else {}
+    except Exception:
+        return {}

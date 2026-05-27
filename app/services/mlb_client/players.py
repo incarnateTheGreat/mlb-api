@@ -7,12 +7,17 @@ Handles player bios and statistics.
 from datetime import date
 from typing import Any
 
-from app.models.player import PlayerBio
-
+from app.models.player import PlayerBio 
+from app.services.memory_cache import (
+    cached_player,
+    cached_player_stats,
+    cached_player_profile,
+)
 
 class PlayersMixin:
     """Mixin providing player-related API methods."""
     
+    @cached_player
     async def get_player(self, player_id: int) -> PlayerBio:
         """Fetch player biographical information."""
         data = await self._get(f"/people/{player_id}")
@@ -42,6 +47,7 @@ class PlayersMixin:
             current_team_name=current_team.get("name"),
         )
     
+    @cached_player_stats
     async def get_player_stats(
         self,
         player_id: int,
@@ -76,3 +82,24 @@ class PlayersMixin:
             return {}
         
         return splits[0].get("stat", {})
+
+    @cached_player_profile
+    async def get_player_profile(self, player_id: int) -> dict[str, Any]:
+        """
+        Fetch full player profile with career stats.
+        
+        Returns the raw MLB API response including:
+        - currentTeam info
+        - team info  
+        - year-by-year hitting and pitching stats
+        - career regular season totals
+        """
+        params = {
+            "hydrate": "currentTeam,team,stats(group=[hitting,pitching],type=[yearByYear,careerRegularSeason],team(league),leagueListId=mlb_hist)",
+            "site": "en",
+        }
+        
+        data = await self._get(f"/people/{player_id}", params=params)
+        people = data.get("people", [])
+        
+        return people[0] if people else {}

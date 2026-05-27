@@ -47,6 +47,9 @@ _game_content_cache: TTLCache = TTLCache(maxsize=200, ttl=90)
 # Longer TTL acceptable since schedule changes are rare
 _schedule_cache: TTLCache = TTLCache(maxsize=50, ttl=120)
 
+# Player cache: 10 min TTL
+_player_cache: TTLCache = TTLCache(maxsize=200, ttl=600)
+
 
 # ============================================================================
 # Cache Decorators
@@ -134,6 +137,66 @@ def cached_schedule(ttl_override: Optional[int] = None):
     return decorator
 
 
+def cached_player(func: Callable[..., T]) -> Callable[..., T]:
+    """
+    Decorator to cache player bio API calls.
+    
+    10-minute TTL since player bios rarely change.
+    """
+    @wraps(func)
+    async def wrapper(self, player_id: int, *args, **kwargs) -> T:
+        cache_key = f"player:{player_id}"
+        
+        if cache_key in _player_cache:
+            return _player_cache[cache_key]
+        
+        result = await func(self, player_id, *args, **kwargs)
+        _player_cache[cache_key] = result
+        return result
+    
+    return wrapper
+
+
+def cached_player_stats(func: Callable[..., T]) -> Callable[..., T]:
+    """
+    Decorator to cache player stats API calls.
+    
+    Includes season in cache key since stats differ by year.
+    """
+    @wraps(func)
+    async def wrapper(self, player_id: int, season: int, *args, **kwargs) -> T:
+        cache_key = f"player_stats:{player_id}:{season}:{_make_cache_key(*args, **kwargs)}"
+        
+        if cache_key in _player_cache:
+            return _player_cache[cache_key]
+        
+        result = await func(self, player_id, season, *args, **kwargs)
+        _player_cache[cache_key] = result
+        return result
+    
+    return wrapper
+
+
+def cached_player_profile(func: Callable[..., T]) -> Callable[..., T]:
+    """
+    Decorator to cache player profile API calls.
+    
+    10-minute TTL for full profile with career stats.
+    """
+    @wraps(func)
+    async def wrapper(self, player_id: int, *args, **kwargs) -> T:
+        cache_key = f"player_profile:{player_id}"
+        
+        if cache_key in _player_cache:
+            return _player_cache[cache_key]
+        
+        result = await func(self, player_id, *args, **kwargs)
+        _player_cache[cache_key] = result
+        return result
+    
+    return wrapper
+
+
 # ============================================================================
 # Cache Management
 # ============================================================================
@@ -178,6 +241,36 @@ def clear_schedule_cache() -> int:
     return cleared
 
 
+def clear_player_cache(player_id: Optional[int] = None) -> int:
+    """
+    Clear cached player data.
+    
+    Args:
+        player_id: Specific player to clear, or None to clear all
+    
+    Returns:
+        Number of cache entries cleared
+    """
+    if player_id is None:
+        cleared = len(_player_cache)
+        _player_cache.clear()
+        return cleared
+    
+    # Clear entries matching this player_id
+    cleared = 0
+    keys_to_delete = [
+        k for k in _player_cache.keys()
+        if k.startswith(f"player:{player_id}") or
+           k.startswith(f"player_stats:{player_id}:") or
+           k.startswith(f"player_profile:{player_id}")
+    ]
+    for key in keys_to_delete:
+        del _player_cache[key]
+        cleared += 1
+    
+    return cleared
+
+
 def get_cache_stats() -> dict[str, Any]:
     """
     Get cache statistics for monitoring.
@@ -199,5 +292,10 @@ def get_cache_stats() -> dict[str, Any]:
             "size": len(_schedule_cache),
             "maxsize": _schedule_cache.maxsize,
             "ttl": _schedule_cache.ttl,
+        },
+        "player": {
+            "size": len(_player_cache),
+            "maxsize": _player_cache.maxsize,
+            "ttl": _player_cache.ttl,
         },
     }

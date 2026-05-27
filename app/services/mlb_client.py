@@ -366,6 +366,28 @@ class MLBStatsClient:
         
         return splits[0].get("stat", {})
 
+    async def get_player_profile(self, player_id: int) -> dict[str, Any]:
+        """
+        Fetch full player profile with career stats.
+        
+        This returns the raw MLB API response including:
+        - currentTeam info
+        - team info  
+        - year-by-year hitting and pitching stats
+        - career regular season totals
+        
+        Used by the player profile page to display comprehensive stats.
+        """
+        params = {
+            "hydrate": "currentTeam,team,stats(group=[hitting,pitching],type=[yearByYear,careerRegularSeason],team(league),leagueListId=mlb_hist)",
+            "site": "en",
+        }
+        
+        data = await self._get(f"/people/{player_id}", params=params)
+        people = data.get("people", [])
+        
+        return people[0] if people else {}
+
     # =========================================================================
     # Content endpoints (GraphQL)
     # =========================================================================
