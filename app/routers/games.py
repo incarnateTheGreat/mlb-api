@@ -12,7 +12,7 @@ Key concepts for the TS developer:
 - Response types are validated by Pydantic before sending
 """
 
-from typing import Optional
+from typing import Annotated, Optional
 from datetime import date as date_type
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -37,7 +37,7 @@ router = APIRouter()
 @router.get("/{game_id}/feed")
 async def get_game_feed(
     game_id: int,
-    mlb_client: MLBStatsClient = Depends(get_mlb_client),
+    mlb_client: Annotated[MLBStatsClient, Depends(get_mlb_client)],
 ) -> dict:
     """
     Fetch raw live feed data for a game.
@@ -57,7 +57,7 @@ async def get_game_feed(
 @router.get("/{game_id}/boxscore", response_model=GameBoxscore)
 async def get_game_boxscore(
     game_id: int,
-    mlb_client: MLBStatsClient = Depends(get_mlb_client),
+    mlb_client: Annotated[MLBStatsClient, Depends(get_mlb_client)],
 ) -> GameBoxscore:
     """
     Fetch raw boxscore data for a game.
@@ -95,13 +95,10 @@ async def get_game_boxscore(
 )
 async def get_game_summary(
     game_id: int,
-    regenerate: bool = Query(
-        default=False,
-        description="Force regeneration even if cached",
-    ),
-    db: AsyncSession = Depends(get_db),
-    mlb_client: MLBStatsClient = Depends(get_mlb_client),
-    ai_service: AIService = Depends(get_ai_service),
+    regenerate: Annotated[bool, Query(description="Force regeneration even if cached")] = False,
+    db: Annotated[AsyncSession, Depends(get_db)] = None,
+    mlb_client: Annotated[MLBStatsClient, Depends(get_mlb_client)] = None,
+    ai_service: Annotated[AIService, Depends(get_ai_service)] = None,
 ) -> GameSummary:
     """
     Get an AI-generated game summary.
@@ -195,15 +192,9 @@ async def get_game_summary(
 @router.get("/schedule")
 async def get_schedule(
     time_zone: str,
-    date: Optional[date_type] = Query(
-        default=None,
-        description="Date in YYYY-MM-DD format (defaults to today)",
-    ),
-    fav_team: Optional[int] = Query(
-        default=None,
-        description="Favorite team ID to prioritize in sorting",
-    ),
-    mlb_client: MLBStatsClient = Depends(get_mlb_client),
+    date: Annotated[Optional[date_type], Query(description="Date in YYYY-MM-DD format (defaults to today)")] = None,
+    fav_team: Annotated[Optional[int], Query(description="Favorite team ID to prioritize in sorting")] = None,
+    mlb_client: Annotated[MLBStatsClient, Depends(get_mlb_client)] = None,
 ) -> dict:
     """
     Get processed game schedule with AL/NL/WBC separation.
@@ -224,11 +215,8 @@ async def get_schedule(
 @router.get("/schedule/raw")
 async def get_schedule_raw(
     time_zone: str,
-    date: Optional[date_type] = Query(
-        default=None,
-        description="Date in YYYY-MM-DD format (defaults to today)",
-    ),
-    mlb_client: MLBStatsClient = Depends(get_mlb_client),
+    date: Annotated[Optional[date_type], Query(description="Date in YYYY-MM-DD format (defaults to today)")] = None,
+    mlb_client: Annotated[MLBStatsClient, Depends(get_mlb_client)] = None,
 ) -> dict:
     """
     Get raw MLB API schedule response without processing.
@@ -246,21 +234,11 @@ async def get_schedule_raw(
 
 @router.get("/schedule/range")
 async def get_schedule_range(
-    start_date: date_type = Query(
-        description="Start date in YYYY-MM-DD format",
-    ),
-    end_date: date_type = Query(
-        description="End date in YYYY-MM-DD format",
-    ),
-    time_zone: str = Query(
-        default="America/Toronto",
-        description="Timezone for game times",
-    ),
-    fields: Optional[str] = Query(
-        default="dates,date,games,gamePk",
-        description="Comma-separated fields to return (minimal by default)",
-    ),
-    mlb_client: MLBStatsClient = Depends(get_mlb_client),
+    start_date: Annotated[date_type, Query(description="Start date in YYYY-MM-DD format")],
+    end_date: Annotated[date_type, Query(description="End date in YYYY-MM-DD format")],
+    time_zone: Annotated[str, Query(description="Timezone for game times")] = "America/Toronto",
+    fields: Annotated[Optional[str], Query(description="Comma-separated fields to return (minimal by default)")] = "dates,date,games,gamePk",
+    mlb_client: Annotated[MLBStatsClient, Depends(get_mlb_client)] = None,
 ) -> dict:
     """
     Get schedule for a date range with minimal data.
@@ -285,7 +263,7 @@ async def get_schedule_range(
 @router.get("/{game_id}/details")
 async def get_game_details(
     game_id: int,
-    mlb_client: MLBStatsClient = Depends(get_mlb_client),
+    mlb_client: Annotated[MLBStatsClient, Depends(get_mlb_client)],
 ) -> dict:
     """
     Fetch detailed schedule data for a specific game.
@@ -305,7 +283,7 @@ async def get_game_details(
 @router.get("/{game_id}/content", response_model=GameContent)
 async def get_game_content(
     game_id: int,
-    mlb_client: MLBStatsClient = Depends(get_mlb_client),
+    mlb_client: Annotated[MLBStatsClient, Depends(get_mlb_client)],
 ) -> GameContent:
     """
     Fetch rich content for a game (videos, articles).

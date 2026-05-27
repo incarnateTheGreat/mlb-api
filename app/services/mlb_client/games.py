@@ -15,16 +15,18 @@ from app.models.game import (
     TeamInfo,
     TopPerformer,
 )
-
+from app.services.memory_cache import cached_game_feed
 
 class GamesMixin:
     """Mixin providing game-related API methods."""
     
+    @cached_game_feed
     async def get_game_feed(self, game_id: int) -> dict[str, Any]:
         """
         Fetch raw live feed data for a game.
         
         Returns the full unprocessed JSON from the MLB v1.1 API.
+        Cached for 10 seconds to reduce API load during live games.
         """
         return await self._get_live(f"/game/{game_id}/feed/live", params={"language": "en"})
     

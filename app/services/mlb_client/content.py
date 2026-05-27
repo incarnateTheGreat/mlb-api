@@ -11,7 +11,7 @@ from app.models.game import (
     VideoPlayback,
     VideoTag,
 )
-
+from app.services.memory_cache import cached_game_content
 
 # GraphQL query for game content
 GAME_CONTENT_QUERY = """
@@ -100,6 +100,7 @@ query getGamesByGamePks(
 class ContentMixin:
     """Mixin providing content-related API methods via GraphQL."""
     
+    @cached_game_content
     async def get_game_content(self, game_id: int) -> GameContent:
         """
         Fetch rich content (videos, articles) for a game via GraphQL.
