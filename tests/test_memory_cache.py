@@ -8,9 +8,11 @@ from app.services.memory_cache import (
     _game_feed_cache,
     _game_content_cache,
     _schedule_cache,
+    _standings_cache,
     cached_game_feed,
     cached_game_content,
     cached_schedule,
+    cached_standings,
     clear_game_cache,
     clear_schedule_cache,
     get_cache_stats,
@@ -23,10 +25,12 @@ def clear_caches():
     _game_feed_cache.clear()
     _game_content_cache.clear()
     _schedule_cache.clear()
+    _standings_cache.clear()
     yield
     _game_feed_cache.clear()
     _game_content_cache.clear()
     _schedule_cache.clear()
+    _standings_cache.clear()
 
 
 # ============================================================================
@@ -136,6 +140,55 @@ class TestCachedSchedule:
         await client.get_schedule("2024-06-01")
         await client.get_schedule("2024-06-01", team_id=137)
         assert call_count == 3
+
+
+class TestCachedStandings:
+    """Tests for the cached_standings decorator."""
+
+    @pytest.mark.asyncio
+    async def test_caches_result(self):
+        """First call should cache; second should return cached value."""
+        call_count = 0
+
+        class MockClient:
+            @cached_standings
+            async def get_standings(self, year: int):
+                nonlocal call_count
+                call_count += 1
+                return {"year": year, "standings": "data"}
+
+        client = MockClient()
+
+        result1 = await client.get_standings(2026)
+        assert result1 == {"year": 2026, "standings": "data"}
+        assert call_count == 1
+
+        result2 = await client.get_standings(2026)
+        assert result2 == {"year": 2026, "standings": "data"}
+        assert call_count == 1  # Still 1, no new call
+
+    @pytest.mark.asyncio
+    async def test_different_years_cached_separately(self):
+        """Different years should have separate cache entries."""
+        call_count = 0
+
+        class MockClient:
+            @cached_standings
+            async def get_standings(self, year: int):
+                nonlocal call_count
+                call_count += 1
+                return {"year": year}
+
+        client = MockClient()
+
+        await client.get_standings(2025)
+        await client.get_standings(2026)
+        assert call_count == 2
+
+        # Both should now be cached
+        await client.get_standings(2025)
+        await client.get_standings(2026)
+        assert call_count == 2
 
 
 # ============================================================================

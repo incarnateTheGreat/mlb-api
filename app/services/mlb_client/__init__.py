@@ -9,6 +9,7 @@ organized into domain-specific modules:
 - schedule: Game schedules and details
 - players: Player bios and statistics
 - content: Video highlights and articles (GraphQL)
+- standings: Division and league standings
 
 Usage:
     from app.services.mlb_client import get_mlb_client, MLBStatsClient
@@ -24,6 +25,7 @@ from .games import GamesMixin
 from .schedule import ScheduleMixin
 from .players import PlayersMixin
 from .content import ContentMixin
+from .standings import StandingsMixin
 
 
 class MLBStatsClient(
@@ -31,6 +33,7 @@ class MLBStatsClient(
     ScheduleMixin,
     PlayersMixin,
     ContentMixin,
+    StandingsMixin,
     BaseMLBClient,
 ):
     """

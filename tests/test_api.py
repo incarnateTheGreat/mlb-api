@@ -76,6 +76,26 @@ class TestScheduleRangeEndpoint:
 
 
 # =============================================================================
+# Standings endpoint tests
+# =============================================================================
+
+class TestStandingsEndpoint:
+    """Tests for /standings endpoint."""
+    
+    def test_standings_invalid_year(self):
+        """Should return 422 for year outside valid range."""
+        response = client.get("/standings?year=1800")
+        
+        assert response.status_code == 422  # Below ge=1900
+    
+    def test_standings_year_too_high(self):
+        """Should return 422 for year above valid range."""
+        response = client.get("/standings?year=2200")
+        
+        assert response.status_code == 422  # Above le=2100
+
+
+# =============================================================================
 # Integration tests (require real API access)
 # =============================================================================
 

@@ -50,6 +50,10 @@ _schedule_cache: TTLCache = TTLCache(maxsize=50, ttl=120)
 # Player cache: 10 min TTL
 _player_cache: TTLCache = TTLCache(maxsize=200, ttl=600)
 
+# Standings cache: 5 min TTL, max 20 entries (one per year)
+# Standings only update once per day's games complete
+_standings_cache: TTLCache = TTLCache(maxsize=20, ttl=300)
+
 
 # ============================================================================
 # Cache Decorators
@@ -192,6 +196,26 @@ def cached_player_profile(func: Callable[..., T]) -> Callable[..., T]:
         
         result = await func(self, player_id, *args, **kwargs)
         _player_cache[cache_key] = result
+        return result
+    
+    return wrapper
+
+
+def cached_standings(func: Callable[..., T]) -> Callable[..., T]:
+    """
+    Decorator to cache standings API calls.
+    
+    5-minute TTL since standings only change after games complete.
+    """
+    @wraps(func)
+    async def wrapper(self, year: int, *args, **kwargs) -> T:
+        cache_key = f"standings:{year}"
+        
+        if cache_key in _standings_cache:
+            return _standings_cache[cache_key]
+        
+        result = await func(self, year, *args, **kwargs)
+        _standings_cache[cache_key] = result
         return result
     
     return wrapper
