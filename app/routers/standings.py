@@ -7,24 +7,21 @@ from datetime import date
 
 from fastapi import APIRouter, Depends, Query
 
-from app.services.mlb_client import get_mlb_client, MLBStatsClient
+from app.services.mlb_client import get_mlb_client, MLBStatsClient, StandingsView
 
 
 router = APIRouter()
 
 
-def process_standings_response(response: dict) -> dict[str, Any]:
+def process_division_standings(response: dict) -> dict[str, Any]:
     """
-    Process raw standings API response into structured league/division data.
+    Process divisional standings into structured league/division data.
     
-    Mirrors the frontend transformation logic:
-    1. Build leagues and divisions structure from response.structure
-    2. Add team records to each division
+    Used for: view=division (default)
     """
     structure = response.get("structure", {})
     records = response.get("records", [])
     
-    # Build leagues and divisions from structure
     sports = structure.get("sports", [])
     if not sports:
         return {}
@@ -60,7 +57,6 @@ def process_standings_response(response: dict) -> dict[str, Any]:
         
         divisions = leagues_and_divisions[league_name]
         
-        # Find the division with matching ID
         for sort_key, division_data in divisions.items():
             if division_data.get("id") == division_id:
                 division_data["division"] = record
@@ -69,23 +65,98 @@ def process_standings_response(response: dict) -> dict[str, Any]:
     return leagues_and_divisions
 
 
+def process_simple_standings(response: dict) -> list[dict]:
+    """
+    Process simple standings (flat team list).
+    
+    Used for: view=mlb, view=preseason
+    """
+    records = response.get("records", [])
+    if not records:
+        return []
+    return records[0].get("teamRecords", [])
+
+
+def process_wildcard_standings(response: dict) -> dict[str, Any]:
+    """
+    Process wildcard standings grouped by league.
+    
+    Used for: view=wildcard
+    Returns: { "AL": { "divisionLeaders": [...], "wildCard": [...] }, "NL": { ... } }
+    """
+    structure = response.get("structure", {})
+    records = response.get("records", [])
+    
+    sports = structure.get("sports", [])
+    if not sports:
+        return {}
+    
+    leagues = sports[0].get("leagues", [])
+    
+    # Initialize structure with league abbreviations
+    result: dict[str, dict[str, list]] = {}
+    for league in leagues:
+        abbrev = league.get("abbreviation", "")
+        result[abbrev] = {
+            "divisionLeaders": [],
+            "wildCard": [],
+        }
+    
+    # Populate with team records
+    for record in records:
+        league_id = record.get("league")
+        standings_type = record.get("standingsType", "")
+        team_records = record.get("teamRecords", [])
+        
+        # Find the league abbreviation
+        league = next((l for l in leagues if l.get("id") == league_id), None)
+        if not league:
+            continue
+        
+        abbrev = league.get("abbreviation", "")
+        if abbrev in result:
+            result[abbrev][standings_type] = team_records
+    
+    return result
+
+
 @router.get("")
 async def get_standings(
     mlb_client: Annotated[MLBStatsClient, Depends(get_mlb_client)],
     year: Annotated[Optional[int], Query(ge=1900, le=2100)] = None,
+    view: Annotated[StandingsView, Query()] = StandingsView.DIVISION,
 ) -> dict:
     """
     Get MLB standings for a season.
     
-    Returns divisional standings organized by league with team records.
-    If year is not provided, defaults to current year.
+    Args:
+        year: Season year (defaults to current year)
+        view: Standings view preset:
+            - division: Divisional standings (default)
+            - mlb: Full league ranking  
+            - preseason: Spring training
+            - wildcard: Wild card race
+    
+    Returns different data structures depending on view:
+        - division: { "American League": { "1": { division data... } } }
+        - mlb/preseason: { teamRecords: [...] }
+        - wildcard: { "AL": { divisionLeaders: [...], wildCard: [...] }, "NL": {...} }
     """
     if year is None:
         year = date.today().year
     
     try:
-        response = await mlb_client.get_standings(year)
-        standings_data = process_standings_response(response)
+        response = await mlb_client.get_standings(year, view)
+        
+        # Process based on view type
+        if view == StandingsView.DIVISION:
+            standings_data = process_division_standings(response)
+        elif view in (StandingsView.MLB, StandingsView.PRESEASON):
+            standings_data = process_simple_standings(response)
+        elif view == StandingsView.WILDCARD:
+            standings_data = process_wildcard_standings(response)
+        else:
+            standings_data = {}
         
         return {
             "standingsData": standings_data,

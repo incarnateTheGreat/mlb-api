@@ -206,15 +206,18 @@ def cached_standings(func: Callable[..., T]) -> Callable[..., T]:
     Decorator to cache standings API calls.
     
     5-minute TTL since standings only change after games complete.
+    Cache key includes both year and view to handle different standings types.
     """
     @wraps(func)
-    async def wrapper(self, year: int, *args, **kwargs) -> T:
-        cache_key = f"standings:{year}"
+    async def wrapper(self, year: int, view: Any = None, *args, **kwargs) -> T:
+        # Get view value - could be positional or keyword arg
+        view_key = str(view) if view else "division"
+        cache_key = f"standings:{year}:{view_key}"
         
         if cache_key in _standings_cache:
             return _standings_cache[cache_key]
         
-        result = await func(self, year, *args, **kwargs)
+        result = await func(self, year, view, *args, **kwargs)
         _standings_cache[cache_key] = result
         return result
     

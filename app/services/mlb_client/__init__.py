@@ -25,7 +25,7 @@ from .games import GamesMixin
 from .schedule import ScheduleMixin
 from .players import PlayersMixin
 from .content import ContentMixin
-from .standings import StandingsMixin
+from .standings import StandingsMixin, StandingsView
 
 
 class MLBStatsClient(
