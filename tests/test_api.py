@@ -96,6 +96,67 @@ class TestStandingsEndpoint:
 
 
 # =============================================================================
+# Matchups endpoint tests
+# =============================================================================
+
+class TestMatchupsEndpoint:
+    """Tests for /matchups endpoints."""
+    
+    def test_matchup_invalid_season_low(self):
+        """Should return 422 for season below valid range."""
+        response = client.get("/matchups/12345/vs/67890?season=1800")
+        
+        assert response.status_code == 422  # Below ge=1900
+    
+    def test_matchup_invalid_season_high(self):
+        """Should return 422 for season above valid range."""
+        response = client.get("/matchups/12345/vs/67890?season=2200")
+        
+        assert response.status_code == 422  # Above le=2100
+    
+    def test_matchup_invalid_player_id(self):
+        """Should return 422 for invalid player ID format."""
+        response = client.get("/matchups/not-a-number/vs/67890")
+        
+        assert response.status_code == 422
+
+
+# =============================================================================
+# Teams endpoint tests
+# =============================================================================
+
+class TestTeamsEndpoint:
+    """Tests for /teams endpoints."""
+    
+    def test_list_teams(self):
+        """Should return list of all teams."""
+        response = client.get("/teams/")
+        
+        assert response.status_code == 200
+        data = response.json()
+        assert isinstance(data, list)
+        assert len(data) == 30  # 30 MLB teams
+        
+        # Each team should have required fields
+        for team in data:
+            assert "slug" in team
+            assert "id" in team
+            assert "name" in team
+    
+    def test_team_info_unknown_slug(self):
+        """Should return 404 for unknown team slug."""
+        response = client.get("/teams/notateam/info")
+        
+        assert response.status_code == 404
+    
+    def test_team_schedule_unknown_slug(self):
+        """Should return 404 for unknown team slug."""
+        response = client.get("/teams/notateam/schedule")
+        
+        assert response.status_code == 404
+
+
+# =============================================================================
 # Integration tests (require real API access)
 # =============================================================================
 

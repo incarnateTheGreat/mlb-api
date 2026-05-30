@@ -54,6 +54,14 @@ _player_cache: TTLCache = TTLCache(maxsize=200, ttl=600)
 # Standings only update once per day's games complete
 _standings_cache: TTLCache = TTLCache(maxsize=20, ttl=300)
 
+# Teams cache: 5 min TTL, max 50 entries
+# Team info with standings rarely changes mid-game
+_teams_cache: TTLCache = TTLCache(maxsize=50, ttl=300)
+
+# Matchup cache: 30 min TTL, max 200 entries
+# AI-generated matchup analyses are expensive and don't change quickly
+_matchup_cache: TTLCache = TTLCache(maxsize=200, ttl=1800)
+
 
 # ============================================================================
 # Cache Decorators
@@ -224,6 +232,67 @@ def cached_standings(func: Callable[..., T]) -> Callable[..., T]:
     return wrapper
 
 
+def cached_team_info(func: Callable[..., T]) -> Callable[..., T]:
+    """
+    Decorator to cache team info API calls.
+    
+    5-minute TTL since team info with standings rarely changes mid-game.
+    """
+    @wraps(func)
+    async def wrapper(self, team_id: int, season: Optional[int] = None, *args, **kwargs) -> T:
+        cache_key = f"team_info:{team_id}:{season}"
+        
+        if cache_key in _teams_cache:
+            return _teams_cache[cache_key]
+        
+        result = await func(self, team_id, season, *args, **kwargs)
+        _teams_cache[cache_key] = result
+        return result
+    
+    return wrapper
+
+
+def cached_team_schedule(func: Callable[..., T]) -> Callable[..., T]:
+    """
+    Decorator to cache team schedule API calls.
+    
+    2-minute TTL since schedules can update for postponements/changes.
+    """
+    @wraps(func)
+    async def wrapper(self, team_id: int, *args, **kwargs) -> T:
+        cache_key = f"team_schedule:{team_id}:{_make_cache_key(*args, **kwargs)}"
+        
+        if cache_key in _teams_cache:
+            return _teams_cache[cache_key]
+        
+        result = await func(self, team_id, *args, **kwargs)
+        _teams_cache[cache_key] = result
+        return result
+    
+    return wrapper
+
+
+def cached_matchup_analysis(func: Callable[..., T]) -> Callable[..., T]:
+    """
+    Decorator to cache AI-generated matchup analyses.
+    
+    30-minute TTL since AI analyses are expensive and player stats
+    don't change within a game.
+    """
+    @wraps(func)
+    async def wrapper(self, batter_id: int, pitcher_id: int, season: int, *args, **kwargs) -> T:
+        cache_key = f"matchup:{batter_id}:{pitcher_id}:{season}"
+        
+        if cache_key in _matchup_cache:
+            return _matchup_cache[cache_key]
+        
+        result = await func(self, batter_id, pitcher_id, season, *args, **kwargs)
+        _matchup_cache[cache_key] = result
+        return result
+    
+    return wrapper
+
+
 # ============================================================================
 # Cache Management
 # ============================================================================
@@ -298,6 +367,78 @@ def clear_player_cache(player_id: Optional[int] = None) -> int:
     return cleared
 
 
+def clear_teams_cache(team_id: Optional[int] = None) -> int:
+    """
+    Clear cached team data.
+    
+    Args:
+        team_id: Specific team to clear, or None to clear all
+    
+    Returns:
+        Number of cache entries cleared
+    """
+    if team_id is None:
+        cleared = len(_teams_cache)
+        _teams_cache.clear()
+        return cleared
+    
+    # Clear entries matching this team_id
+    cleared = 0
+    keys_to_delete = [
+        k for k in _teams_cache.keys()
+        if k.startswith(f"team_info:{team_id}:") or
+           k.startswith(f"team_schedule:{team_id}:")
+    ]
+    for key in keys_to_delete:
+        del _teams_cache[key]
+        cleared += 1
+    
+    return cleared
+
+
+def clear_matchup_cache(
+    batter_id: Optional[int] = None,
+    pitcher_id: Optional[int] = None,
+) -> int:
+    """
+    Clear cached matchup analyses.
+    
+    Args:
+        batter_id: Clear matchups involving this batter, or None
+        pitcher_id: Clear matchups involving this pitcher, or None
+        If both are None, clears all matchup cache.
+    
+    Returns:
+        Number of cache entries cleared
+    """
+    if batter_id is None and pitcher_id is None:
+        cleared = len(_matchup_cache)
+        _matchup_cache.clear()
+        return cleared
+    
+    # Clear entries matching the specified player(s)
+    cleared = 0
+    keys_to_delete = []
+    
+    for key in _matchup_cache.keys():
+        # Key format: matchup:{batter_id}:{pitcher_id}:{season}
+        parts = key.split(":")
+        if len(parts) >= 3:
+            key_batter = int(parts[1])
+            key_pitcher = int(parts[2])
+            
+            if batter_id and key_batter == batter_id:
+                keys_to_delete.append(key)
+            elif pitcher_id and key_pitcher == pitcher_id:
+                keys_to_delete.append(key)
+    
+    for key in keys_to_delete:
+        del _matchup_cache[key]
+        cleared += 1
+    
+    return cleared
+
+
 def get_cache_stats() -> dict[str, Any]:
     """
     Get cache statistics for monitoring.
@@ -324,5 +465,15 @@ def get_cache_stats() -> dict[str, Any]:
             "size": len(_player_cache),
             "maxsize": _player_cache.maxsize,
             "ttl": _player_cache.ttl,
+        },
+        "teams": {
+            "size": len(_teams_cache),
+            "maxsize": _teams_cache.maxsize,
+            "ttl": _teams_cache.ttl,
+        },
+        "matchup": {
+            "size": len(_matchup_cache),
+            "maxsize": _matchup_cache.maxsize,
+            "ttl": _matchup_cache.ttl,
         },
     }

@@ -26,6 +26,7 @@ from .schedule import ScheduleMixin
 from .players import PlayersMixin
 from .content import ContentMixin
 from .standings import StandingsMixin, StandingsView
+from .teams import TeamsMixin, TEAM_INDEX, TEAM_NAMES, TEAM_ABBREV_INDEX
 
 
 class MLBStatsClient(
@@ -34,6 +35,7 @@ class MLBStatsClient(
     PlayersMixin,
     ContentMixin,
     StandingsMixin,
+    TeamsMixin,
     BaseMLBClient,
 ):
     """
@@ -64,4 +66,11 @@ def get_mlb_client() -> MLBStatsClient:
 
 
 # Re-export for backwards compatibility
-__all__ = ["MLBStatsClient", "get_mlb_client"]
+__all__ = [
+    "MLBStatsClient",
+    "get_mlb_client",
+    "StandingsView",
+    "TEAM_INDEX",
+    "TEAM_NAMES",
+    "TEAM_ABBREV_INDEX",
+]

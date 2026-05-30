@@ -14,7 +14,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import get_settings
 from app.database import init_db, close_db
-from app.routers import games, players, matchups, analysis, standings
+from app.routers import games, players, matchups, analysis, standings, teams
 
 
 @asynccontextmanager
@@ -59,6 +59,7 @@ app.include_router(players.router, prefix="/players", tags=["players"])
 app.include_router(matchups.router, prefix="/matchups", tags=["matchups"])
 app.include_router(analysis.router, prefix="/analysis", tags=["analysis"])
 app.include_router(standings.router, prefix="/standings", tags=["standings"])
+app.include_router(teams.router, prefix="/teams", tags=["teams"])
 
 
 @app.get("/health")
