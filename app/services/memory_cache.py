@@ -62,6 +62,10 @@ _teams_cache: TTLCache = TTLCache(maxsize=50, ttl=300)
 # AI-generated matchup analyses are expensive and don't change quickly
 _matchup_cache: TTLCache = TTLCache(maxsize=200, ttl=1800)
 
+# Gamelogs cache: 2 min TTL, max 200 entries
+# Short TTL because gamelogs include live game data that updates during games
+_gamelogs_cache: TTLCache = TTLCache(maxsize=200, ttl=120)
+
 
 # ============================================================================
 # Cache Decorators
@@ -204,6 +208,35 @@ def cached_player_profile(func: Callable[..., T]) -> Callable[..., T]:
         
         result = await func(self, player_id, *args, **kwargs)
         _player_cache[cache_key] = result
+        return result
+    
+    return wrapper
+
+
+def cached_player_gamelogs(func: Callable[..., T]) -> Callable[..., T]:
+    """
+    Decorator to cache player game logs API calls.
+    
+    2-minute TTL because gamelogs include live game data that updates
+    during games. Cache key includes player_id, season, month, and game_type.
+    """
+    @wraps(func)
+    async def wrapper(
+        self,
+        player_id: int,
+        season: int,
+        month: Optional[int] = None,
+        game_type: str = "R",
+        *args,
+        **kwargs,
+    ) -> T:
+        cache_key = f"gamelogs:{player_id}:{season}:{month}:{game_type}"
+        
+        if cache_key in _gamelogs_cache:
+            return _gamelogs_cache[cache_key]
+        
+        result = await func(self, player_id, season, month, game_type, *args, **kwargs)
+        _gamelogs_cache[cache_key] = result
         return result
     
     return wrapper
@@ -439,6 +472,40 @@ def clear_matchup_cache(
     return cleared
 
 
+def clear_gamelogs_cache(player_id: Optional[int] = None) -> int:
+    """
+    Clear cached player game logs.
+    
+    Args:
+        player_id: Specific player to clear, or None to clear all
+    
+    Returns:
+        Number of cache entries cleared
+    """
+    if player_id is None:
+        cleared = len(_gamelogs_cache)
+        _gamelogs_cache.clear()
+        return cleared
+    
+    # Clear entries matching this player_id
+    cleared = 0
+    keys_to_delete = [
+        k for k in _gamelogs_cache.keys()
+        if k.startswith(f"gamelogs:{player_id}:")
+    ]
+    for key in keys_to_delete:
+        del _gamelogs_cache[key]
+        cleared += 1
+    
+    return cleared
+    
+    for key in keys_to_delete:
+        del _matchup_cache[key]
+        cleared += 1
+    
+    return cleared
+
+
 def get_cache_stats() -> dict[str, Any]:
     """
     Get cache statistics for monitoring.
@@ -475,5 +542,10 @@ def get_cache_stats() -> dict[str, Any]:
             "size": len(_matchup_cache),
             "maxsize": _matchup_cache.maxsize,
             "ttl": _matchup_cache.ttl,
+        },
+        "gamelogs": {
+            "size": len(_gamelogs_cache),
+            "maxsize": _gamelogs_cache.maxsize,
+            "ttl": _gamelogs_cache.ttl,
         },
     }

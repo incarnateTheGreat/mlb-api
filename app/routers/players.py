@@ -6,7 +6,7 @@ from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 
-from app.models.player import PlayerBio, PlayerProfile, AdvancedBattingStats, BattingStats
+from app.models.player import PlayerBio, PlayerProfile, AdvancedBattingStats, BattingStats, GameLogsResponse
 from app.services.mlb_client import get_mlb_client, MLBStatsClient
 from app.services.ai_service import get_ai_service, AIService
 from app.services.sabermetrics import enhance_batting_stats
@@ -156,3 +156,35 @@ async def get_player_profile(
         return profile if profile else {}
     except Exception:
         return {}
+
+
+@router.get("/{player_id}/gamelogs/{season}", response_model=GameLogsResponse)
+async def get_player_gamelogs(
+    player_id: int,
+    season: int,
+    month: Optional[int] = Query(default=None, ge=1, le=12, description="Month filter (1-12)"),
+    game_type: str = Query(default="R", description="Game type: R (regular), S (spring), etc."),
+    mlb_client: MLBStatsClient = Depends(get_mlb_client),
+) -> GameLogsResponse:
+    """
+    Get player game logs for a season.
+    
+    Returns hitting and pitching game-by-game stats with isGameOver
+    computed by checking the schedule API for recent games.
+    
+    - **month**: Optional filter for a specific month (regular season only)
+    - **game_type**: R (regular), S (spring training), etc.
+    """
+    try:
+        result = await mlb_client.get_player_gamelogs(
+            player_id=player_id,
+            season=season,
+            month=month,
+            game_type=game_type,
+        )
+        return GameLogsResponse(**result)
+    except Exception as e:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Game logs not found for player {player_id}: {str(e)}",
+        )

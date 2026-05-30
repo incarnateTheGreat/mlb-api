@@ -157,6 +157,46 @@ class TestTeamsEndpoint:
 
 
 # =============================================================================
+# Player gamelogs endpoint tests
+# =============================================================================
+
+class TestPlayerGamelogsEndpoint:
+    """Tests for /players/{player_id}/gamelogs/{season} endpoint."""
+    
+    def test_gamelogs_invalid_month_low(self):
+        """Should return 422 for month below 1."""
+        response = client.get("/players/12345/gamelogs/2024?month=0")
+        
+        assert response.status_code == 422
+    
+    def test_gamelogs_invalid_month_high(self):
+        """Should return 422 for month above 12."""
+        response = client.get("/players/12345/gamelogs/2024?month=13")
+        
+        assert response.status_code == 422
+    
+    def test_gamelogs_default_game_type(self):
+        """Should accept request with default game_type."""
+        # Will fail with 404 for fake player, but validates params
+        response = client.get("/players/12345/gamelogs/2024")
+        
+        # Either 200 or 404, but not 422 (validation passes)
+        assert response.status_code in [200, 404]
+    
+    def test_gamelogs_with_month_filter(self):
+        """Should accept valid month filter."""
+        response = client.get("/players/12345/gamelogs/2024?month=6")
+        
+        assert response.status_code in [200, 404]
+    
+    def test_gamelogs_with_game_type(self):
+        """Should accept game_type parameter."""
+        response = client.get("/players/12345/gamelogs/2024?game_type=S")
+        
+        assert response.status_code in [200, 404]
+
+
+# =============================================================================
 # Integration tests (require real API access)
 # =============================================================================
 
@@ -187,3 +227,27 @@ class TestIntegration:
         if response.status_code == 200:
             data = response.json()
             assert "dates" in data
+    
+    def test_real_player_gamelogs(self):
+        """Test real player gamelogs endpoint with Aaron Judge (player_id=592450)."""
+        response = client.get("/players/592450/gamelogs/2024")
+        
+        if response.status_code == 200:
+            data = response.json()
+            assert "hittingSplits" in data
+            assert "pitchingSplits" in data
+            assert isinstance(data["hittingSplits"], list)
+            assert isinstance(data["pitchingSplits"], list)
+            
+            # Judge should have hitting stats
+            if data["hittingSplits"]:
+                split = data["hittingSplits"][0]
+                assert "season" in split
+                assert "stat" in split
+                assert "team" in split
+                assert "opponent" in split
+                assert "date" in split
+                assert "isHome" in split
+                assert "isWin" in split
+                assert "isGameOver" in split
+                assert "game" in split

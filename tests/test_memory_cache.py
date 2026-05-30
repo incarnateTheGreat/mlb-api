@@ -11,6 +11,7 @@ from app.services.memory_cache import (
     _standings_cache,
     _teams_cache,
     _matchup_cache,
+    _gamelogs_cache,
     cached_game_feed,
     cached_game_content,
     cached_schedule,
@@ -18,10 +19,12 @@ from app.services.memory_cache import (
     cached_team_info,
     cached_team_schedule,
     cached_matchup_analysis,
+    cached_player_gamelogs,
     clear_game_cache,
     clear_schedule_cache,
     clear_teams_cache,
     clear_matchup_cache,
+    clear_gamelogs_cache,
     get_cache_stats,
 )
 
@@ -35,6 +38,7 @@ def clear_caches():
     _standings_cache.clear()
     _teams_cache.clear()
     _matchup_cache.clear()
+    _gamelogs_cache.clear()
     yield
     _game_feed_cache.clear()
     _game_content_cache.clear()
@@ -42,6 +46,7 @@ def clear_caches():
     _standings_cache.clear()
     _teams_cache.clear()
     _matchup_cache.clear()
+    _gamelogs_cache.clear()
 
 
 # ============================================================================
@@ -364,6 +369,87 @@ class TestCachedMatchupAnalysis:
         assert call_count == 2
 
 
+class TestCachedPlayerGamelogs:
+    """Tests for the cached_player_gamelogs decorator."""
+
+    @pytest.mark.asyncio
+    async def test_caches_result(self):
+        """First call should cache; second should return cached value."""
+        call_count = 0
+
+        class MockClient:
+            @cached_player_gamelogs
+            async def get_player_gamelogs(self, player_id: int, season: int, month=None, game_type="R"):
+                nonlocal call_count
+                call_count += 1
+                return {"player_id": player_id, "season": season, "month": month}
+
+        client = MockClient()
+
+        result1 = await client.get_player_gamelogs(592450, 2026)
+        assert result1 == {"player_id": 592450, "season": 2026, "month": None}
+        assert call_count == 1
+
+        result2 = await client.get_player_gamelogs(592450, 2026)
+        assert result2 == {"player_id": 592450, "season": 2026, "month": None}
+        assert call_count == 1  # Still 1, no new call
+
+    @pytest.mark.asyncio
+    async def test_different_players_cached_separately(self):
+        """Different players should have separate cache entries."""
+        call_count = 0
+
+        class MockClient:
+            @cached_player_gamelogs
+            async def get_player_gamelogs(self, player_id: int, season: int, month=None, game_type="R"):
+                nonlocal call_count
+                call_count += 1
+                return {"player_id": player_id}
+
+        client = MockClient()
+
+        await client.get_player_gamelogs(592450, 2026)
+        await client.get_player_gamelogs(660271, 2026)
+        assert call_count == 2
+
+    @pytest.mark.asyncio
+    async def test_different_months_cached_separately(self):
+        """Different month filters should have separate cache entries."""
+        call_count = 0
+
+        class MockClient:
+            @cached_player_gamelogs
+            async def get_player_gamelogs(self, player_id: int, season: int, month=None, game_type="R"):
+                nonlocal call_count
+                call_count += 1
+                return {"month": month}
+
+        client = MockClient()
+
+        await client.get_player_gamelogs(592450, 2026, month=5)
+        await client.get_player_gamelogs(592450, 2026, month=6)
+        await client.get_player_gamelogs(592450, 2026, month=None)
+        assert call_count == 3
+
+    @pytest.mark.asyncio
+    async def test_different_game_types_cached_separately(self):
+        """Different game types should have separate cache entries."""
+        call_count = 0
+
+        class MockClient:
+            @cached_player_gamelogs
+            async def get_player_gamelogs(self, player_id: int, season: int, month=None, game_type="R"):
+                nonlocal call_count
+                call_count += 1
+                return {"game_type": game_type}
+
+        client = MockClient()
+
+        await client.get_player_gamelogs(592450, 2026, game_type="R")
+        await client.get_player_gamelogs(592450, 2026, game_type="S")
+        assert call_count == 2
+
+
 # ============================================================================
 # Cache Management Tests
 # ============================================================================
@@ -512,6 +598,43 @@ class TestClearMatchupCache:
         assert "matchup:111:222:2026" in _matchup_cache
 
 
+class TestClearGamelogsCache:
+    """Tests for clear_gamelogs_cache function."""
+
+    def test_clear_all_gamelogs(self):
+        """Clearing without player_id should remove all gamelogs cache entries."""
+        _gamelogs_cache["gamelogs:592450:2026:None:R"] = {"data": 1}
+        _gamelogs_cache["gamelogs:660271:2026:5:R"] = {"data": 2}
+        _gamelogs_cache["gamelogs:592450:2025:None:S"] = {"data": 3}
+
+        cleared = clear_gamelogs_cache()
+
+        assert cleared == 3
+        assert len(_gamelogs_cache) == 0
+
+    def test_clear_specific_player(self):
+        """Clearing a specific player should only remove that player's gamelogs."""
+        _gamelogs_cache["gamelogs:592450:2026:None:R"] = {"data": 1}
+        _gamelogs_cache["gamelogs:592450:2026:5:R"] = {"data": 2}
+        _gamelogs_cache["gamelogs:660271:2026:None:R"] = {"data": 3}
+
+        cleared = clear_gamelogs_cache(592450)
+
+        assert cleared == 2
+        assert "gamelogs:592450:2026:None:R" not in _gamelogs_cache
+        assert "gamelogs:592450:2026:5:R" not in _gamelogs_cache
+        assert "gamelogs:660271:2026:None:R" in _gamelogs_cache
+
+    def test_clear_nonexistent_player(self):
+        """Clearing a player not in cache should return 0."""
+        _gamelogs_cache["gamelogs:592450:2026:None:R"] = {"data": 1}
+
+        cleared = clear_gamelogs_cache(999999)
+
+        assert cleared == 0
+        assert "gamelogs:592450:2026:None:R" in _gamelogs_cache
+
+
 class TestGetCacheStats:
     """Tests for get_cache_stats function."""
 
@@ -524,8 +647,9 @@ class TestGetCacheStats:
         assert "schedule" in stats
         assert "teams" in stats
         assert "matchup" in stats
+        assert "gamelogs" in stats
 
-        for cache_name in ["game_feed", "game_content", "schedule", "teams", "matchup"]:
+        for cache_name in ["game_feed", "game_content", "schedule", "teams", "matchup", "gamelogs"]:
             assert "size" in stats[cache_name]
             assert "maxsize" in stats[cache_name]
             assert "ttl" in stats[cache_name]
@@ -537,6 +661,7 @@ class TestGetCacheStats:
         _game_content_cache["content:1"] = {}
         _teams_cache["team_info:141:2026"] = {}
         _matchup_cache["matchup:111:222:2026"] = {}
+        _gamelogs_cache["gamelogs:592450:2026:None:R"] = {}
 
         stats = get_cache_stats()
 
@@ -545,6 +670,7 @@ class TestGetCacheStats:
         assert stats["schedule"]["size"] == 0
         assert stats["teams"]["size"] == 1
         assert stats["matchup"]["size"] == 1
+        assert stats["gamelogs"]["size"] == 1
 
     def test_ttl_values(self):
         """TTL values should match the configured values."""
@@ -555,3 +681,4 @@ class TestGetCacheStats:
         assert stats["schedule"]["ttl"] == 120
         assert stats["teams"]["ttl"] == 300
         assert stats["matchup"]["ttl"] == 1800
+        assert stats["gamelogs"]["ttl"] == 120

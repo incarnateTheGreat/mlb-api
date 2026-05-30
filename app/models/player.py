@@ -121,3 +121,36 @@ class PlayerProfile(BaseModel):
         None, 
         description="AI-generated scouting report highlighting strengths and weaknesses"
     )
+
+
+class GameLogTeam(BaseModel):
+    """Team reference in game log."""
+    id: int
+    name: str
+    abbreviation: str
+    link: str
+
+
+class GameLogGame(BaseModel):
+    """Game reference in game log."""
+    gamePk: int
+    link: str
+
+
+class GameLogSplit(BaseModel):
+    """Individual game log entry."""
+    season: str
+    stat: dict  # Raw stat object from API
+    team: GameLogTeam
+    opponent: GameLogTeam
+    date: str
+    isHome: bool
+    isWin: bool
+    isGameOver: bool
+    game: GameLogGame
+
+
+class GameLogsResponse(BaseModel):
+    """Response for player game logs."""
+    hittingSplits: list[GameLogSplit]
+    pitchingSplits: list[GameLogSplit]
