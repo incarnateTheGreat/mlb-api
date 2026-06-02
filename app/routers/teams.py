@@ -80,6 +80,48 @@ async def get_team_info(
         )
 
 
+@router.get("/{team_slug}/detailed")
+async def get_team_detailed(
+    team_slug: Annotated[str, Path(description="Team slug (e.g., 'bluejays')")],
+    roster_type: Annotated[str, Query(description="Roster type")] = "fullSeason",
+    mlb_client: Annotated[MLBStatsClient, Depends(get_mlb_client)] = None,
+) -> dict[str, Any]:
+    """
+    Fetch complete team information including roster and coaches.
+    
+    This endpoint fetches team details (venue, league, division),
+    roster, and coaching staff in parallel for the team info page.
+    
+    Returns:
+    - team: Team info with venue, league, division, sport
+    - roster: List of roster entries
+    - coaches: List of coaching staff entries
+    """
+    team_id = TEAM_INDEX.get(team_slug)
+    if not team_id:
+        raise HTTPException(status_code=404, detail=f"Unknown team: {team_slug}")
+    
+    try:
+        # Fetch all three in parallel
+        import asyncio
+        team, roster, coaches = await asyncio.gather(
+            mlb_client.get_team_detail(team_id),
+            mlb_client.get_team_roster(team_id, roster_type),
+            mlb_client.get_team_coaches(team_id),
+        )
+        
+        return {
+            "team": team,
+            "roster": roster,
+            "coaches": coaches,
+        }
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error fetching team data: {str(e)}",
+        )
+
+
 @router.get("/{team_slug}/schedule")
 async def get_team_schedule(
     team_slug: Annotated[str, Path(description="Team slug (e.g., 'bluejays')")],

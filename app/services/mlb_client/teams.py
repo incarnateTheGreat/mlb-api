@@ -7,7 +7,13 @@ Handles team info and team schedule data.
 from datetime import date
 from typing import Any, Optional
 
-from app.services.memory_cache import cached_team_info, cached_team_schedule
+from app.services.memory_cache import (
+    cached_team_info,
+    cached_team_detail,
+    cached_team_schedule,
+    cached_team_roster,
+    cached_team_coaches,
+)
 
 
 # Team slug to ID mapping
@@ -307,3 +313,67 @@ class TeamsMixin:
         }
         
         return await self._get("/schedule", params=params)
+
+    @cached_team_detail
+    async def get_team_detail(
+        self,
+        team_id: int,
+    ) -> dict[str, Any]:
+        """
+        Fetch detailed team information with venue, league, division.
+        
+        This endpoint is specifically for the team info page.
+        
+        Args:
+            team_id: MLB team ID
+        
+        Returns:
+            Team info including venue, league, division, sport
+        """
+        params = {
+            "hydrate": "venue,league,division,sport",
+        }
+        
+        data = await self._get(f"/teams/{team_id}", params=params)
+        teams = data.get("teams", [])
+        return teams[0] if teams else {}
+
+    @cached_team_roster
+    async def get_team_roster(
+        self,
+        team_id: int,
+        roster_type: str = "fullSeason",
+    ) -> list[dict[str, Any]]:
+        """
+        Fetch team roster.
+        
+        Args:
+            team_id: MLB team ID
+            roster_type: Type of roster ("active", "fullSeason", "40Man")
+        
+        Returns:
+            List of roster entries with player and position info
+        """
+        params = {
+            "rosterType": roster_type,
+        }
+        
+        data = await self._get(f"/teams/{team_id}/roster", params=params)
+        return data.get("roster", [])
+
+    @cached_team_coaches
+    async def get_team_coaches(
+        self,
+        team_id: int,
+    ) -> list[dict[str, Any]]:
+        """
+        Fetch team coaching staff.
+        
+        Args:
+            team_id: MLB team ID
+        
+        Returns:
+            List of coach entries with person and title info
+        """
+        data = await self._get(f"/teams/{team_id}/coaches")
+        return data.get("roster", [])

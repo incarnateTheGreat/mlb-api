@@ -154,6 +154,26 @@ class TestTeamsEndpoint:
         response = client.get("/teams/notateam/schedule")
         
         assert response.status_code == 404
+    
+    def test_team_detailed_unknown_slug(self):
+        """Should return 404 for unknown team slug on detailed endpoint."""
+        response = client.get("/teams/notateam/detailed")
+        
+        assert response.status_code == 404
+    
+    def test_team_detailed_default_roster_type(self):
+        """Should accept request with default roster type."""
+        # Will fail with 500 if API is down, but validates params
+        response = client.get("/teams/yankees/detailed")
+        
+        # Either 200 or 500 (API unavailable), but not 422 (validation)
+        assert response.status_code in [200, 500]
+    
+    def test_team_detailed_custom_roster_type(self):
+        """Should accept roster_type parameter."""
+        response = client.get("/teams/yankees/detailed?roster_type=active")
+        
+        assert response.status_code in [200, 500]
 
 
 # =============================================================================

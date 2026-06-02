@@ -285,6 +285,26 @@ def cached_team_info(func: Callable[..., T]) -> Callable[..., T]:
     return wrapper
 
 
+def cached_team_detail(func: Callable[..., T]) -> Callable[..., T]:
+    """
+    Decorator to cache team detail API calls.
+    
+    5-minute TTL since team details (venue, league, division) rarely change.
+    """
+    @wraps(func)
+    async def wrapper(self, team_id: int, *args, **kwargs) -> T:
+        cache_key = f"team_detail:{team_id}"
+        
+        if cache_key in _teams_cache:
+            return _teams_cache[cache_key]
+        
+        result = await func(self, team_id, *args, **kwargs)
+        _teams_cache[cache_key] = result
+        return result
+    
+    return wrapper
+
+
 def cached_team_schedule(func: Callable[..., T]) -> Callable[..., T]:
     """
     Decorator to cache team schedule API calls.
@@ -294,6 +314,46 @@ def cached_team_schedule(func: Callable[..., T]) -> Callable[..., T]:
     @wraps(func)
     async def wrapper(self, team_id: int, *args, **kwargs) -> T:
         cache_key = f"team_schedule:{team_id}:{_make_cache_key(*args, **kwargs)}"
+        
+        if cache_key in _teams_cache:
+            return _teams_cache[cache_key]
+        
+        result = await func(self, team_id, *args, **kwargs)
+        _teams_cache[cache_key] = result
+        return result
+    
+    return wrapper
+
+
+def cached_team_roster(func: Callable[..., T]) -> Callable[..., T]:
+    """
+    Decorator to cache team roster API calls.
+    
+    5-minute TTL since rosters don't change frequently.
+    """
+    @wraps(func)
+    async def wrapper(self, team_id: int, *args, **kwargs) -> T:
+        cache_key = f"team_roster:{team_id}:{_make_cache_key(*args, **kwargs)}"
+        
+        if cache_key in _teams_cache:
+            return _teams_cache[cache_key]
+        
+        result = await func(self, team_id, *args, **kwargs)
+        _teams_cache[cache_key] = result
+        return result
+    
+    return wrapper
+
+
+def cached_team_coaches(func: Callable[..., T]) -> Callable[..., T]:
+    """
+    Decorator to cache team coaches API calls.
+    
+    5-minute TTL since coaching staff rarely changes.
+    """
+    @wraps(func)
+    async def wrapper(self, team_id: int, *args, **kwargs) -> T:
+        cache_key = f"team_coaches:{team_id}"
         
         if cache_key in _teams_cache:
             return _teams_cache[cache_key]
