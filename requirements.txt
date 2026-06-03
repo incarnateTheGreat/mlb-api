@@ -12,6 +12,9 @@ httpx>=0.26.0
 # In-memory caching with TTL
 cachetools>=5.3.0
 
+# Fast JSON serialization (10x faster than stdlib json)
+orjson>=3.9.0
+
 # Database
 sqlalchemy[asyncio]>=2.0.25
 asyncpg>=0.29.0  # Async Postgres driver

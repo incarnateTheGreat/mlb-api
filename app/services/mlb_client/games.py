@@ -30,6 +30,15 @@ class GamesMixin:
         """
         return await self._get_live(f"/game/{game_id}/feed/live", params={"language": "en"})
     
+    async def get_game_feed_raw(self, game_id: int) -> dict[str, Any]:
+        """
+        Fetch raw live feed data without decorator caching.
+        
+        Used by the /feed endpoint which manages its own bytes cache
+        for faster JSON serialization.
+        """
+        return await self._get_live(f"/game/{game_id}/feed/live", params={"language": "en"})
+    
     async def get_game_boxscore(self, game_id: int) -> GameBoxscore:
         """
         Fetch boxscore data for a specific game.

@@ -15,7 +15,7 @@ Key concepts for the TS developer:
 from typing import Annotated, Optional
 from datetime import date as date_type
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
@@ -28,6 +28,10 @@ from app.services.cache_service import (
     cache_game_summary,
     CacheService,
 )
+from app.services.memory_cache import (
+    get_cached_game_feed_bytes,
+    cache_game_feed_bytes,
+)
 from app.models.game import GameBoxscore, GameSummary, GameSummaryRequest, GameContent
 from app.utils import process_schedule_response
 
@@ -38,15 +42,35 @@ router = APIRouter()
 async def get_game_feed(
     game_id: int,
     mlb_client: Annotated[MLBStatsClient, Depends(get_mlb_client)],
-) -> dict:
+) -> Response:
     """
     Fetch raw live feed data for a game.
     
     Returns the full unprocessed JSON from the MLB v1.1 API.
     This is the same data as /boxscore but without any transformation.
+    
+    Uses pre-serialized JSON bytes cache to avoid re-serializing
+    multi-MB payloads on every request (10x faster response times).
     """
     try:
-        return await mlb_client.get_game_feed(game_id)
+        # Check for pre-serialized cached bytes (fast path)
+        cached_bytes = get_cached_game_feed_bytes(game_id)
+        if cached_bytes is not None:
+            return Response(
+                content=cached_bytes,
+                media_type="application/json",
+                headers={"X-Cache": "HIT"},
+            )
+        
+        # Fetch from API, serialize once, and cache
+        data = await mlb_client.get_game_feed_raw(game_id)
+        json_bytes = cache_game_feed_bytes(game_id, data)
+        
+        return Response(
+            content=json_bytes,
+            media_type="application/json",
+            headers={"X-Cache": "MISS"},
+        )
     except Exception as e:
         raise HTTPException(
             status_code=404,

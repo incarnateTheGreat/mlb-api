@@ -25,6 +25,7 @@ import json
 from functools import wraps
 from typing import Any, Callable, Optional, TypeVar
 
+import orjson
 from cachetools import TTLCache
 
 # Type variable for generic function return types
@@ -38,6 +39,10 @@ T = TypeVar("T")
 # Game feed cache: 10 second TTL, max 500 games
 # Short TTL because live game data updates frequently
 _game_feed_cache: TTLCache = TTLCache(maxsize=500, ttl=10)
+
+# Game feed JSON bytes cache: pre-serialized for fast HTTP responses
+# Avoids re-serializing multi-MB payloads on every request
+_game_feed_bytes_cache: TTLCache = TTLCache(maxsize=500, ttl=10)
 
 # Game content cache: 90 second TTL, max 200 games
 # Shorter TTL so new highlights appear within ~1.5 minutes
@@ -100,6 +105,64 @@ def cached_game_feed(func: Callable[..., T]) -> Callable[..., T]:
         return result
     
     return wrapper
+
+
+def cached_game_feed_bytes(func: Callable[..., T]) -> Callable[..., T]:
+    """
+    Decorator to cache game feed as pre-serialized JSON bytes.
+    
+    Returns (bytes, dict) tuple - bytes for fast HTTP response,
+    dict for any processing that needs the parsed data.
+    
+    This avoids re-serializing multi-MB payloads on every request,
+    which is the main bottleneck for live game feed endpoints.
+    """
+    @wraps(func)
+    async def wrapper(self, game_id: int, *args, **kwargs) -> tuple[bytes, dict]:
+        cache_key = f"feed_bytes:{game_id}"
+        
+        # Check cache
+        if cache_key in _game_feed_bytes_cache:
+            return _game_feed_bytes_cache[cache_key]
+        
+        # Fetch from API
+        result = await func(self, game_id, *args, **kwargs)
+        
+        # Serialize once with orjson (10x faster than stdlib json)
+        json_bytes = orjson.dumps(result)
+        cached_value = (json_bytes, result)
+        
+        # Store in cache
+        _game_feed_bytes_cache[cache_key] = cached_value
+        return cached_value
+    
+    return wrapper
+
+
+def get_cached_game_feed_bytes(game_id: int) -> Optional[bytes]:
+    """
+    Get pre-serialized game feed JSON bytes from cache.
+    
+    Returns None if not cached. Use this in endpoints to return
+    cached bytes directly without re-serialization.
+    """
+    cache_key = f"feed_bytes:{game_id}"
+    if cache_key in _game_feed_bytes_cache:
+        json_bytes, _ = _game_feed_bytes_cache[cache_key]
+        return json_bytes
+    return None
+
+
+def cache_game_feed_bytes(game_id: int, data: dict) -> bytes:
+    """
+    Cache game feed data and return serialized JSON bytes.
+    
+    Use this to serialize once and cache both the bytes and dict.
+    """
+    cache_key = f"feed_bytes:{game_id}"
+    json_bytes = orjson.dumps(data)
+    _game_feed_bytes_cache[cache_key] = (json_bytes, data)
+    return json_bytes
 
 
 def cached_game_content(func: Callable[..., T]) -> Callable[..., T]:
@@ -405,16 +468,22 @@ def clear_game_cache(game_id: Optional[int] = None) -> int:
     if game_id is None:
         # Clear all game caches
         cleared += len(_game_feed_cache)
+        cleared += len(_game_feed_bytes_cache)
         cleared += len(_game_content_cache)
         _game_feed_cache.clear()
+        _game_feed_bytes_cache.clear()
         _game_content_cache.clear()
     else:
         # Clear specific game
         feed_key = f"feed:{game_id}"
+        feed_bytes_key = f"feed_bytes:{game_id}"
         content_key = f"content:{game_id}"
         
         if feed_key in _game_feed_cache:
             del _game_feed_cache[feed_key]
+            cleared += 1
+        if feed_bytes_key in _game_feed_bytes_cache:
+            del _game_feed_bytes_cache[feed_bytes_key]
             cleared += 1
         if content_key in _game_content_cache:
             del _game_content_cache[content_key]
@@ -577,6 +646,11 @@ def get_cache_stats() -> dict[str, Any]:
             "size": len(_game_feed_cache),
             "maxsize": _game_feed_cache.maxsize,
             "ttl": _game_feed_cache.ttl,
+        },
+        "game_feed_bytes": {
+            "size": len(_game_feed_bytes_cache),
+            "maxsize": _game_feed_bytes_cache.maxsize,
+            "ttl": _game_feed_bytes_cache.ttl,
         },
         "game_content": {
             "size": len(_game_content_cache),
