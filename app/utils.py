@@ -528,9 +528,10 @@ def process_team_schedule(
     dates = schedule_response.get("dates", [])
     
     # Filter completed games for record calculation
+    # Guard against date entries with empty games list
     completed_dates = [
         d for d in dates
-        if d.get("games", [{}])[0].get("status", {}).get("abstractGameCode") == "F"
+        if d.get("games") and d["games"][0].get("status", {}).get("abstractGameCode") == "F"
     ]
     range_record = calculate_range_record(completed_dates, team_id, month)
     
