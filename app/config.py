@@ -7,7 +7,10 @@ BaseSettings automatically reads from .env and validates types.
 """
 
 from functools import lru_cache
+from typing import Optional
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+from app.constants import DEFAULT_ANTHROPIC_MODEL
 
 
 class Settings(BaseSettings):
@@ -23,12 +26,34 @@ class Settings(BaseSettings):
     
     # External APIs
     anthropic_api_key: str
+    anthropic_ssl_verify: bool = True
+    anthropic_ca_bundle_path: Optional[str] = None
     mlb_stats_api_base_url: str = "https://statsapi.mlb.com/api/v1"
     mlb_stats_api_live_url: str = "https://ws.statsapi.mlb.com/api/v1.1"
     
     # App settings
     debug: bool = False
     cache_ttl_seconds: int = 300  # 5 minutes default
+    
+    # Copilot settings (v1)
+    copilot_enabled: bool = True
+    copilot_max_total_latency_ms: int = 30000  # 30 second hard timeout
+    copilot_max_tokens: int = 2048
+    copilot_model: str = DEFAULT_ANTHROPIC_MODEL
+    copilot_fallback_model: Optional[str] = None
+    copilot_temperature: float = 0.7
+    copilot_model_timeout_ms: int = 12000
+    copilot_model_retries: int = 2
+    copilot_model_retry_backoff_ms: int = 200
+    copilot_mock_llm_enabled: bool = False
+    copilot_mock_llm_latency_ms: int = 120
+
+    # RAG settings (Week 3)
+    rag_enabled: bool = True
+    rag_top_k: int = 4
+    rag_min_score: float = 0.18
+    rag_chunk_size_chars: int = 700
+    rag_chunk_overlap_chars: int = 120
     
     model_config = SettingsConfigDict(
         env_file=".env",
