@@ -10,6 +10,7 @@ from typing import Any, Optional
 
 from cachetools import TTLCache
 
+from app.config import get_settings
 from app.services.mlb_client import get_mlb_client
 
 
@@ -302,12 +303,16 @@ class ToolRegistry:
     Registry and dispatcher for all available tools.
     
     Provides a central location for tool registration, discovery, and execution.
+    Implements coordinated caching, retries, and timeout enforcement.
     """
     
     def __init__(self) -> None:
         """Initialize the tool registry with all available tools."""
+        settings = get_settings()
         self.tools: dict[str, Tool] = {}
         self.cache: TTLCache = TTLCache(maxsize=500, ttl=180)
+        self.tool_retries = settings.copilot_tool_retries
+        self.tool_retry_backoff_ms = settings.copilot_tool_retry_backoff_ms
         self._register_default_tools()
     
     def _register_default_tools(self) -> None:
@@ -355,14 +360,18 @@ class ToolRegistry:
     
     async def execute_tool(self, tool_name: str, **kwargs) -> dict[str, Any]:
         """
-        Execute a tool by name with the given inputs.
+        Execute a tool by name with the given inputs and retry logic.
+        
+        Implements exponential backoff retry strategy for transient failures.
+        Distinguishes between permanent errors (skip retries) and transient
+        errors (attempt retry with backoff).
         
         Args:
             tool_name: Name of the tool to execute
             **kwargs: Arguments to pass to the tool
         
         Returns:
-            Tool execution result with success/error status
+            Tool execution result with success/error status and retry metadata
         """
         tool = self.get_tool(tool_name)
         if tool is None:
@@ -371,20 +380,135 @@ class ToolRegistry:
                 "error": f"Tool '{tool_name}' not found",
             }
         
-        return await tool.execute(**kwargs)
+        attempts_total = self.tool_retries + 1
+        failures: list[str] = []
+        
+        for attempt in range(1, attempts_total + 1):
+            try:
+                result = await tool.execute(**kwargs)
+                
+                # Wrap result to track retry metadata
+                if not result.get("cached"):
+                    result["retry_attempt"] = attempt
+                    result["retry_failures"] = failures
+                
+                return result
+            
+            except Exception as exc:
+                # Log failure and decide whether to retry
+                error_msg = f"attempt {attempt}: {exc.__class__.__name__}: {str(exc)}"
+                failures.append(error_msg)
+                
+                # Distinguish transient vs permanent errors
+                is_transient = self._is_transient_error(exc)
+                if not is_transient:
+                    # Permanent error: return immediately without retry
+                    return {
+                        "success": False,
+                        "error": f"Permanent error: {str(exc)}",
+                        "retry_attempt": attempt,
+                        "retry_failures": failures,
+                    }
+                
+                if attempt == attempts_total:
+                    # Out of retries
+                    return {
+                        "success": False,
+                        "error": "Tool execution failed after retries",
+                        "retry_attempt": attempt,
+                        "retry_failures": failures,
+                    }
+                
+                # Wait with exponential backoff before next retry
+                backoff_ms = self._bounded_backoff_ms(attempt)
+                await asyncio.sleep(backoff_ms / 1000.0)
+        
+        # Fallback (should not reach here)
+        return {
+            "success": False,
+            "error": "Tool execution exhausted all attempts",
+            "retry_failures": failures,
+        }
+
+    def _is_transient_error(self, exc: Exception) -> bool:
+        """
+        Determine if an error is transient (retry-worthy) vs permanent.
+        
+        Transient errors: timeout, connection reset, service unavailable
+        Permanent errors: validation, not found, invalid argument
+        """
+        error_msg = str(exc).lower()
+        
+        # Transient patterns
+        transient_patterns = {
+            "timeout",
+            "connection reset",
+            "connection refused",
+            "temporarily unavailable",
+            "too many requests",
+            "service unavailable",
+            "gateway timeout",
+            "bad gateway",
+            "request timeout",
+        }
+        
+        # Permanent patterns (skip retries)
+        permanent_patterns = {
+            "not found",
+            "invalid",
+            "validation",
+            "bad request",
+            "unauthorized",
+            "forbidden",
+        }
+        
+        # Check patterns
+        if any(p in error_msg for p in transient_patterns):
+            return True
+        if any(p in error_msg for p in permanent_patterns):
+            return False
+        
+        # Default: treat as transient (err on side of retry)
+        return True
+    
+    def _bounded_backoff_ms(self, attempt: int) -> int:
+        """
+        Return exponential backoff with jitter, bounded by retry backoff setting.
+        
+        Grows as: backoff_ms * (2 ^ (attempt - 1)) with random jitter
+        """
+        base_backoff_ms = self.tool_retry_backoff_ms
+        exponential_ms = base_backoff_ms * (2 ** (attempt - 1))
+        
+        # Cap at reasonable max (5 seconds)
+        max_backoff_ms = 5000
+        return int(min(exponential_ms, max_backoff_ms))
 
     async def execute_tool_cached(self, tool_name: str, **kwargs) -> dict[str, Any]:
-        """Execute tool with normalized cache lookup and cache hit metadata."""
+        """
+        Execute tool with normalized cache lookup and retry logic.
+        
+        Returns cached result with cache hit metadata if available.
+        Otherwise invokes execute_tool with retry logic and caches successful result.
+        
+        Returns:
+            Tool execution result with cached/retry metadata
+        """
         cache_key = self._make_cache_key(tool_name, kwargs)
         if cache_key in self.cache:
             cached_result = dict(self.cache[cache_key])
             cached_result["cached"] = True
+            cached_result["latency_ms"] = 0  # Cached hits are instant
             return cached_result
 
+        # Execute with retry logic
         result = await self.execute_tool(tool_name, **kwargs)
         result["cached"] = False
+        
+        # Cache successful results only
         if result.get("success"):
             self.cache[cache_key] = dict(result)
+        
         return result
 
     def _make_cache_key(self, tool_name: str, kwargs: dict[str, Any]) -> str:

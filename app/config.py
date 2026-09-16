@@ -45,6 +45,8 @@ class Settings(BaseSettings):
     copilot_model_timeout_ms: int = 12000
     copilot_model_retries: int = 2
     copilot_model_retry_backoff_ms: int = 200
+    copilot_tool_retries: int = 2
+    copilot_tool_retry_backoff_ms: int = 100
     copilot_mock_llm_enabled: bool = False
     copilot_mock_llm_latency_ms: int = 120
 
@@ -54,6 +56,12 @@ class Settings(BaseSettings):
     rag_min_score: float = 0.18
     rag_chunk_size_chars: int = 700
     rag_chunk_overlap_chars: int = 120
+    
+    # Rate limiting (Milestone 4)
+    copilot_rate_limit_enabled: bool = True
+    copilot_rate_limit_requests_per_minute: int = 30
+    copilot_rate_limit_requests_per_hour: int = 300
+    copilot_rate_limit_by_session: bool = True
     
     model_config = SettingsConfigDict(
         env_file=".env",

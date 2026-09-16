@@ -9,11 +9,39 @@ from pydantic import BaseModel
 
 from app.services.ai_service import get_ai_service, AIService
 from app.services.copilot_service import get_copilot_service, CopilotService
+from app.services.rate_limiter import get_rate_limiter, RateLimiter
 from app.models.analysis import CopilotRequest, CopilotResponse
 from app.models.trace import CopilotTrace, TraceStep
 
 
 router = APIRouter()
+
+
+async def check_copilot_rate_limit(
+    rate_limiter: Annotated[RateLimiter, Depends(get_rate_limiter)],
+    request: CopilotRequest,
+) -> dict[str, str]:
+    """
+    Dependency to check rate limits for copilot requests.
+    
+    Returns metadata about rate limit status.
+    Raises HTTPException if limits are exceeded.
+    """
+    session_id = request.session_id or "anonymous"
+    is_allowed, metadata = rate_limiter.is_allowed(session_id)
+    
+    if not is_allowed:
+        limit_type = metadata.get("limit_exceeded", "unknown")
+        raise HTTPException(
+            status_code=429,
+            detail={
+                "error": "Rate limit exceeded",
+                "limit_type": limit_type,
+                "session_id": session_id,
+            },
+        )
+    
+    return metadata
 
 
 class AnalysisRequest(BaseModel):
@@ -100,11 +128,15 @@ Provide a clear, well-reasoned answer grounded in the data provided."""
 
 @router.post(
     "/copilot/query",
-    responses={500: {"description": "Copilot query failed"}},
+    responses={
+        429: {"description": "Rate limit exceeded"},
+        500: {"description": "Copilot query failed"}
+    },
 )
 async def copilot_query(
     request: CopilotRequest,
     copilot_service: Annotated[CopilotService, Depends(get_copilot_service)],
+    rate_limit_metadata: Annotated[dict[str, str], Depends(check_copilot_rate_limit)],
 ) -> CopilotResponse:
     """
     Public-data grounded AI copilot for MLB questions.

@@ -452,43 +452,81 @@ class CopilotService:
         max_tokens: int,
         temperature: float,
     ) -> tuple[str, ModelInfo, Optional[str]]:
-        """Generate a combined tool + doc answer using Anthropic."""
+        """
+        Generate a combined tool + doc answer using Anthropic.
+        
+        Provides explicit guidance on separating:
+        - Direct factual output from tools (game scores, player stats)
+        - Contextual/explanatory information from documents (rules, history)
+        
+        Falls back gracefully to tool answer if synthesis fails.
+        """
         if self.mock_llm_enabled:
             return self._mock_hybrid_answer(query, results, tools_used, tool_answer)
 
+        # Format document context with clear structure
         context_blocks = []
         for index, item in enumerate(results, start=1):
             context_blocks.append(
-                f"[{index}] Title: {item.title}\nURL: {item.url}\nSnippet: {item.snippet}"
+                f"[DOC {index}] Title: {item.title}\n"
+                f"URL: {item.url}\n"
+                f"Section: {item.section or 'N/A'}\n"
+                f"Content: {item.snippet}"
             )
 
+        # Summarize tool invocations
         tool_trace = "\n".join(
-            [f"- {tool.tool_name}: success={tool.success}, cached={tool.cached}" for tool in tools_used]
+            [
+                f"  {tool.tool_name}: {'✓ success' if tool.success else '✗ failed'} "
+                f"(cached={tool.cached}, {tool.latency_ms}ms)"
+                for tool in tools_used
+            ]
         )
 
+        # Build prompt with explicit synthesis guidance
+        documents_section = "\n\n".join(context_blocks) if context_blocks else "(no documents retrieved)"
+        
         prompt = (
-            "Synthesize a response using tool facts and retrieved documents. "
-            "Separate direct game/stat facts from broader explanatory context. "
-            "If docs do not support a claim, say uncertain.\n\n"
-            f"User query: {query}\n\n"
-            f"Tool summary:\n{tool_answer}\n"
-            f"Tool traces:\n{tool_trace or '- none'}\n\n"
-            f"Retrieved docs:\n{chr(10).join(context_blocks) if context_blocks else 'none'}"
+            "You are a baseball expert assistant. Your task is to synthesize a response combining:\n"
+            "1. Direct facts from live MLB data (tool output)\n"
+            "2. Explanatory context from baseball knowledge (documents)\n\n"
+            
+            "SYNTHESIS RULES:\n"
+            "- State tool facts directly: 'The score is ...' (from tool)\n"
+            "- Use documents for context: 'According to MLB rules, ...' (cite [DOC N])\n"
+            "- Separate facts from analysis: distinguish what happened vs why\n"
+            "- If documents don't support a claim, mark it as tool-only: 'The data shows ...'\n"
+            "- If synthesis fails, return the tool answer as-is\n\n"
+            
+            "USER QUERY:\n"
+            f"{query}\n\n"
+            
+            "LIVE DATA (from MLB StatsAPI):\n"
+            f"{tool_answer}\n"
+            f"Tool executions: {tool_trace or 'none'}\n\n"
+            
+            "REFERENCE DOCUMENTS (for context and rules):\n"
+            f"{documents_section}\n\n"
+            
+            "Generate your response now, clearly separating tool facts from document-backed explanations."
         )
 
         generated_text, model_info, warning = self._call_llm_with_resilience(
             prompt=prompt,
-            max_tokens=min(max_tokens, 800),
+            max_tokens=min(max_tokens, 900),
             temperature=temperature,
         )
+        
         if generated_text:
             return (generated_text, model_info, warning)
 
-        return (
-            tool_answer,
-            model_info,
-            f"{warning}; returned tool answer" if warning else "Hybrid synthesis failed; returned tool answer",
+        # Graceful fallback: return tool answer if synthesis fails
+        fallback_warning = (
+            f"{warning}; returning tool answer without document synthesis"
+            if warning
+            else "Hybrid synthesis failed; returning tool answer"
         )
+        return (tool_answer, model_info, fallback_warning)
 
     def _call_llm_with_resilience(
         self,
