@@ -16,7 +16,6 @@ from pathlib import Path
 from typing import Any, Optional
 
 import anthropic
-import httpx2
 
 from app.config import get_settings
 from app.models.analysis import (
@@ -40,15 +39,8 @@ class CopilotService:
     
     def __init__(self) -> None:
         settings = get_settings()
-        verify_config: bool | str = settings.anthropic_ssl_verify
-        if settings.anthropic_ca_bundle_path:
-            verify_config = str(Path(settings.anthropic_ca_bundle_path).expanduser())
-
-        http_client = httpx2.Client(timeout=30.0, verify=verify_config)
-        self.client = anthropic.Anthropic(
-            api_key=settings.anthropic_api_key,
-            http_client=http_client,
-        )
+        # Let Anthropic manage HTTP client internally
+        self.client = anthropic.Anthropic(api_key=settings.anthropic_api_key)
         self.model = settings.copilot_model
         self.fallback_model = settings.copilot_fallback_model
         self.max_latency_ms = settings.copilot_max_total_latency_ms
