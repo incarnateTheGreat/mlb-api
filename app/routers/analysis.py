@@ -359,7 +359,7 @@ async def copilot_trace(
         # STEP 2: Mode Selection
         step2_start = time.time()
         requested_mode = request.mode or "auto"
-        inferred_mode = copilot_service._infer_mode(request) if requested_mode == "auto" else None
+        inferred_mode = copilot_service._infer_mode(request.query) if requested_mode == "auto" else None
         selected_mode = inferred_mode if inferred_mode else requested_mode
         
         trace_steps.append(TraceStep(
