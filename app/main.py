@@ -14,7 +14,8 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import get_settings
 from app.database import init_db, close_db
-from app.routers import games, players, matchups, analysis, standings, teams
+from app.middleware import CSRFMiddleware
+from app.routers import auth, games, players, matchups, analysis, standings, teams
 
 
 @asynccontextmanager
@@ -40,20 +41,27 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-# CORS configuration — allow your Remix frontend
+# CORS configuration — allow your React Router frontend
 # In production, restrict origins to your actual domain
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
-        "http://localhost:3000",  # Remix dev server
-        "http://localhost:5173",  # Vite dev server
+        "http://localhost:3000",  # Production server
+        "http://localhost:5173",  # Vite dev server (default)
+        "http://localhost:5174",  # Vite dev server (alternate)
+        get_settings().frontend_url,  # Configured frontend URL
     ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
+# CSRF protection middleware
+# Validates X-CSRF-Token header matches csrf_token cookie on mutative requests
+app.add_middleware(CSRFMiddleware)
+
 # Register routers (like Express Router or Remix route modules)
+app.include_router(auth.router)  # No prefix, routes are /auth/*
 app.include_router(games.router, prefix="/games", tags=["games"])
 app.include_router(players.router, prefix="/players", tags=["players"])
 app.include_router(matchups.router, prefix="/matchups", tags=["matchups"])
