@@ -587,7 +587,6 @@ class CopilotService:
                 message = self.client.messages.create(
                     model=model_name,
                     max_tokens=max_tokens,
-                    temperature=temperature,
                     messages=[{"role": "user", "content": prompt}],
                 )
                 usage = message.usage
