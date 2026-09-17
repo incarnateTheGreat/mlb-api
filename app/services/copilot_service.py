@@ -607,7 +607,8 @@ class CopilotService:
                     False,
                 )
             except Exception as exc:
-                failures.append(f"{model_name} attempt {attempt}: {exc.__class__.__name__}")
+                error_detail = f"{exc.__class__.__name__}: {str(exc)}"
+                failures.append(f"{model_name} attempt {attempt}: {error_detail}")
                 if attempt == attempts_per_model:
                     break
 
