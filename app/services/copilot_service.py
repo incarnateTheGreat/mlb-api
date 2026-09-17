@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 import anthropic
-import httpx
+import httpx2
 
 from app.config import get_settings
 from app.models.analysis import (
@@ -44,7 +44,7 @@ class CopilotService:
         if settings.anthropic_ca_bundle_path:
             verify_config = str(Path(settings.anthropic_ca_bundle_path).expanduser())
 
-        http_client = httpx.Client(timeout=30.0, verify=verify_config)
+        http_client = httpx2.Client(timeout=30.0, verify=verify_config)
         self.client = anthropic.Anthropic(
             api_key=settings.anthropic_api_key,
             http_client=http_client,
