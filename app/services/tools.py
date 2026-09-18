@@ -53,18 +53,19 @@ class GetGameSummaryTool(Tool):
     
     Args:
         game_pk (int): The game ID from MLB StatsAPI
+        include_play_by_play (bool): Whether to include play-by-play key moments (default: False)
     
     Returns:
-        Game boxscore, score, status, and key performers
+        Game boxscore, score, status, key performers, and optionally play-by-play summary
     """
     
     def __init__(self) -> None:
         super().__init__(
             name=ToolType.GET_GAME_SUMMARY.value,
-            description="Fetch game summary, score, and status by game ID"
+            description="Fetch game summary, score, and status by game ID. Optionally include play-by-play key moments."
         )
     
-    async def execute(self, game_pk: int, **kwargs) -> dict[str, Any]:
+    async def execute(self, game_pk: int, include_play_by_play: bool = False, **kwargs) -> dict[str, Any]:
         """Execute the game summary tool."""
         start_time = time.time()
         
@@ -109,6 +110,23 @@ class GetGameSummaryTool(Tool):
                 },
                 "latency_ms": int((time.time() - start_time) * 1000),
             }
+            
+            # Optionally fetch and include play-by-play summary
+            if include_play_by_play:
+                try:
+                    plays = await asyncio.wait_for(
+                        self.mlb_client.get_game_plays(game_pk),
+                        timeout=self.timeout_seconds,
+                    )
+                    plays_summary = self.mlb_client._summarize_plays(plays)
+                    result["data"]["plays_summary"] = plays_summary
+                except Exception as e:
+                    # If play-by-play fetch fails, continue without it
+                    result["data"]["plays_summary"] = {
+                        "error": f"Failed to fetch play-by-play: {str(e)}",
+                        "key_moments": [],
+                    }
+            
             return result
         
         except ToolError as e:
