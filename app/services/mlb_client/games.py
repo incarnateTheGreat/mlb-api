@@ -266,6 +266,7 @@ class GamesMixin:
                     "type": "strikeout",
                     "pitcher": pitcher_name,
                     "batter": batter_name,
+                    "description": description,
                 })
             
             # Track inning progression
