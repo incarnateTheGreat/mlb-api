@@ -317,10 +317,19 @@ class CopilotService:
         """Select a deterministic tool and normalized arguments from request context/query."""
         context = request.context or {}
         query_lower = request.query.lower()
+        
+        # Detect if user wants play-by-play details
+        wants_plays = any(keyword in query_lower for keyword in [
+            "play-by-play", "play by play", "moment", "key moment", 
+            "detailed", "what happened", "inning", "inning-by-inning"
+        ])
 
         game_pk = context.get("game_pk") or context.get("game_id")
         if isinstance(game_pk, int):
-            return (ToolType.GET_GAME_SUMMARY.value, {"game_pk": game_pk})
+            tool_inputs = {"game_pk": game_pk}
+            if wants_plays:
+                tool_inputs["include_play_by_play"] = True
+            return (ToolType.GET_GAME_SUMMARY.value, tool_inputs)
 
         team_id = context.get("team_id")
         start_date = context.get("start_date")
@@ -364,11 +373,32 @@ class CopilotService:
             home = data.get("home_team", {})
             away = data.get("away_team", {})
             status = data.get("status", {})
-            return (
+            
+            answer = (
                 f"{away.get('name', 'Away')} {away.get('runs', 0)} - "
                 f"{home.get('name', 'Home')} {home.get('runs', 0)}. "
                 f"Status: {status.get('detailed_state', 'Unknown')}."
             )
+            
+            # Include play-by-play summary if available
+            plays_summary = data.get("plays_summary")
+            if plays_summary and plays_summary.get("key_moments"):
+                moments = plays_summary.get("key_moments", [])
+                key_count = plays_summary.get("key_moments_count", 0)
+                answer += f" Game had {plays_summary.get('total_plays', 0)} plays with {key_count} key moments."
+                
+                # Add brief summary of first few moments
+                for moment in moments[:3]:
+                    moment_type = moment.get("type", "")
+                    if moment_type == "home_run":
+                        answer += f" {moment.get('player')} hit a home run in inning {moment.get('inning')}."
+                    elif moment_type == "scoring_play":
+                        inning = moment.get("inning")
+                        away_score = moment.get("away_score")
+                        home_score = moment.get("home_score")
+                        answer += f" Scoring play in inning {inning}: {away_score}-{home_score}."
+            
+            return answer
 
         if tool_name == ToolType.GET_TEAM_SCHEDULE.value:
             count = data.get("games_count", 0)
