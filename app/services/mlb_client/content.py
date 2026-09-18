@@ -4,6 +4,8 @@ Content-related MLB API endpoints via GraphQL.
 Handles video highlights, articles, and other rich content.
 """
 
+from typing import Optional
+
 from app.models.game import (
     GameArticle,
     GameContent,
@@ -177,7 +179,7 @@ class ContentMixin:
             ))
         return videos
     
-    def _parse_recap_article(self, recap_list: list[dict]) -> GameArticle | None:
+    def _parse_recap_article(self, recap_list: list[dict]) -> Optional[GameArticle]:
         """Parse recap article from GraphQL response."""
         if not recap_list:
             return None

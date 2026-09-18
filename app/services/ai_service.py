@@ -9,7 +9,7 @@ consistent, parseable JSON output that matches our Pydantic models.
 import json
 import time
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Union
 
 import anthropic
 import httpx
@@ -30,7 +30,7 @@ class AIService:
     
     def __init__(self) -> None:
         settings = get_settings()
-        verify_config: bool | str = settings.anthropic_ssl_verify
+        verify_config: Union[bool, str] = settings.anthropic_ssl_verify
         if settings.anthropic_ca_bundle_path:
             verify_config = str(Path(settings.anthropic_ca_bundle_path).expanduser())
 

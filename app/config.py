@@ -62,6 +62,13 @@ class Settings(BaseSettings):
     copilot_rate_limit_requests_per_minute: int = 30
     copilot_rate_limit_requests_per_hour: int = 300
     copilot_rate_limit_by_session: bool = True
+
+    # Environment (Railway sets this automatically)
+    railway_environment: Optional[str] = None
+    
+    # Cookie/Security settings
+    cookie_domain: Optional[str] = None  # e.g., ".mlbsite.com" for production
+    frontend_url: str = "http://localhost:5174"  # For CORS
     
     model_config = SettingsConfigDict(
         env_file=".env",
@@ -80,3 +87,22 @@ def get_settings() -> Settings:
     on first call, then returned from cache on subsequent calls.
     """
     return Settings()
+
+
+def is_production() -> bool:
+    """Check if running in production environment."""
+    settings = get_settings()
+    return settings.railway_environment is not None
+
+
+def get_cookie_domain() -> Optional[str]:
+    """
+    Get the cookie domain based on environment.
+    
+    Returns None for localhost (browser uses current domain),
+    or the configured domain for production (e.g., ".mlbsite.com").
+    """
+    settings = get_settings()
+    if settings.railway_environment:
+        return settings.cookie_domain
+    return None
