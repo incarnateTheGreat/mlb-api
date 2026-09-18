@@ -19,6 +19,7 @@ class ToolType(str, Enum):
     GET_GAME_SUMMARY = "get_game_summary"
     GET_TEAM_SCHEDULE = "get_team_schedule"
     GET_PLAYER_STAT_SPLIT = "get_player_stat_split"
+    GET_HISTORICAL_GAMES = "get_historical_games"
 
 
 class ToolError(Exception):
@@ -316,6 +317,83 @@ class GetPlayerStatSplitTool(Tool):
             }
 
 
+class GetHistoricalGamesTool(Tool):
+    """
+    Find historical games by event type and season.
+    
+    Args:
+        event_type (str): "world series", "alcs", "alds", "nlcs", "nlds", "regular season", "playoffs"
+        season (int): The season year (e.g., 1993, 2024)
+        game_number (int): Optional specific game number in series (1-7)
+    
+    Returns:
+        List of games matching the criteria with game_pk, dates, teams, scores
+    """
+    
+    def __init__(self) -> None:
+        super().__init__(
+            name=ToolType.GET_HISTORICAL_GAMES.value,
+            description="Find historical games by event type and season to get game_pk for detailed queries"
+        )
+    
+    async def execute(
+        self,
+        event_type: str,
+        season: int,
+        game_number: Optional[int] = None,
+        **kwargs
+    ) -> dict[str, Any]:
+        """Execute the historical games lookup tool."""
+        start_time = time.time()
+        
+        try:
+            # Validate inputs
+            if not isinstance(event_type, str) or len(event_type) == 0:
+                raise ToolError(f"Invalid event_type: {event_type}. Must be non-empty string.")
+            
+            if not isinstance(season, int) or season < 1900 or season > 2100:
+                raise ToolError(f"Invalid season: {season}. Must be reasonable year.")
+            
+            if game_number is not None:
+                if not isinstance(game_number, int) or game_number < 1 or game_number > 7:
+                    raise ToolError(f"Invalid game_number: {game_number}. Must be 1-7.")
+            
+            games = await asyncio.wait_for(
+                self.mlb_client.get_historical_games(
+                    event_type=event_type,
+                    season=season,
+                    game_number=game_number,
+                ),
+                timeout=self.timeout_seconds,
+            )
+            
+            result = {
+                "success": True,
+                "data": {
+                    "event_type": event_type,
+                    "season": season,
+                    "game_number": game_number,
+                    "games_count": len(games),
+                    "games": games,
+                },
+                "latency_ms": int((time.time() - start_time) * 1000),
+            }
+            return result
+        
+        except ToolError as e:
+            return {
+                "success": False,
+                "error": str(e),
+                "latency_ms": int((time.time() - start_time) * 1000),
+            }
+        except Exception as e:
+            return {
+                "success": False,
+                "error": f"Unexpected error: {str(e)}",
+                "latency_ms": int((time.time() - start_time) * 1000),
+            }
+
+
 class ToolRegistry:
     """
     Registry and dispatcher for all available tools.
@@ -338,10 +416,12 @@ class ToolRegistry:
         game_summary_tool = GetGameSummaryTool()
         team_schedule_tool = GetTeamScheduleTool()
         player_stats_tool = GetPlayerStatSplitTool()
+        historical_games_tool = GetHistoricalGamesTool()
         
         self.register(game_summary_tool)
         self.register(team_schedule_tool)
         self.register(player_stats_tool)
+        self.register(historical_games_tool)
     
     def register(self, tool: Tool) -> None:
         """

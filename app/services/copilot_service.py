@@ -364,6 +364,51 @@ class CopilotService:
                 ToolType.GET_PLAYER_STAT_SPLIT.value,
                 {"player_id": player_id, "season": season, "split_type": str(split_type)},
             )
+        
+        # Detect historical game queries like "1993 World Series" or "2024 ALDS Game 3"
+        historical_event = context.get("event_type")
+        historical_season = context.get("season")
+        historical_game_number = context.get("game_number")
+        
+        if historical_event and historical_season:
+            tool_inputs = {
+                "event_type": historical_event,
+                "season": historical_season,
+            }
+            if historical_game_number:
+                tool_inputs["game_number"] = historical_game_number
+            return (ToolType.GET_HISTORICAL_GAMES.value, tool_inputs)
+        
+        # Auto-detect historic event patterns in query (e.g., "1993 World Series", "2024 ALDS")
+        import re
+        
+        # Pattern: YYYY World Series, YYYY ALCS, etc.
+        event_patterns = [
+            (r"(\d{4})\s+(world\s+series)", "world series"),
+            (r"(\d{4})\s+(alcs)", "alcs"),
+            (r"(\d{4})\s+(alds)", "alds"),
+            (r"(\d{4})\s+(nlcs)", "nlcs"),
+            (r"(\d{4})\s+(nlds)", "nlds"),
+            (r"(\d{4})\s+(playoffs?)", "playoffs"),
+        ]
+        
+        for pattern, event in event_patterns:
+            match = re.search(pattern, query_lower)
+            if match:
+                season_year = int(match.group(1))
+                
+                # Look for game number (Game 1, Game 6, etc.)
+                game_match = re.search(r"game\s+(\d)", query_lower)
+                game_number = int(game_match.group(1)) if game_match else None
+                
+                tool_inputs = {
+                    "event_type": event,
+                    "season": season_year,
+                }
+                if game_number:
+                    tool_inputs["game_number"] = game_number
+                
+                return (ToolType.GET_HISTORICAL_GAMES.value, tool_inputs)
 
         return None
 
@@ -415,6 +460,30 @@ class CopilotService:
                 f"Player {data.get('player_id')} {data.get('season')} "
                 f"{data.get('stats_group', 'hitting')} stats include HR={hr}, AVG={avg}, RBI={rbi}."
             )
+        
+        if tool_name == ToolType.GET_HISTORICAL_GAMES.value:
+            event_type = data.get("event_type", "Unknown")
+            season = data.get("season", "")
+            games = data.get("games", [])
+            games_count = data.get("games_count", 0)
+            
+            if games_count == 0:
+                return f"No {event_type} games found for {season}."
+            elif games_count == 1:
+                game = games[0]
+                return (
+                    f"Found {season} {event_type} Game {data.get('game_number', 1)}: "
+                    f"{game.get('away_team', 'Away')} @ {game.get('home_team', 'Home')}. "
+                    f"Score: {game.get('away_score', 0)}-{game.get('home_score', 0)} ({game.get('status', 'Unknown')}). "
+                    f"Game ID: {game.get('game_pk')}."
+                )
+            else:
+                game_list = "; ".join([
+                    f"Game {i+1}: {g.get('away_team', 'Away')} @ {g.get('home_team', 'Home')} "
+                    f"({g.get('away_score', 0)}-{g.get('home_score', 0)})"
+                    for i, g in enumerate(games[:5])
+                ])
+                return f"Found {games_count} {season} {event_type} games: {game_list}"
 
         return "Tool execution completed successfully."
 
