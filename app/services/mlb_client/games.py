@@ -184,3 +184,99 @@ class GamesMixin:
             )
         
         return None
+    
+    async def get_game_plays(self, game_id: int) -> list[dict[str, Any]]:
+        """
+        Fetch play-by-play data for a game.
+        
+        Returns the allPlays array from the live feed, chronologically ordered.
+        Each play contains about (inning, time), result (event type, description),
+        matchup (batter, pitcher), and runners (on base).
+        
+        Args:
+            game_id: MLB game ID (game_pk)
+        
+        Returns:
+            List of play objects with timestamp, players, result, etc.
+        """
+        feed_data = await self.get_game_feed(game_id)
+        plays_obj = feed_data.get("liveData", {}).get("plays", {})
+        # plays is an object with keys: allPlays, currentPlay, scoringPlays, playsByInning
+        all_plays = plays_obj.get("allPlays", [])
+        return all_plays if isinstance(all_plays, list) else []
+    
+    def _summarize_plays(self, plays: list[dict[str, Any]]) -> dict[str, Any]:
+        """
+        Create a condensed summary of key moments from plays.
+        
+        Extracts:
+        - Scoring plays with score progression
+        - Home runs with player names
+        - Key events (walks, strikeouts in crucial moments)
+        - Inning-by-inning progression
+        
+        Returns structured summary for Claude to synthesize into narrative.
+        """
+        key_moments = []
+        inning_progression = {}
+        
+        for play in plays:
+            if not isinstance(play, dict):
+                continue
+            
+            about = play.get("about", {})
+            result = play.get("result", {})
+            matchup = play.get("matchup", {})
+            
+            inning = about.get("inning", 0)
+            is_scoring = about.get("isScoringPlay", False)
+            
+            event_type = result.get("eventType", "")
+            description = result.get("description", "")
+            away_score = result.get("awayScore")
+            home_score = result.get("homeScore")
+            
+            batter_name = matchup.get("batter", {}).get("fullName", "Unknown")
+            pitcher_name = matchup.get("pitcher", {}).get("fullName", "Unknown")
+            
+            # Track scoring plays
+            if is_scoring:
+                key_moments.append({
+                    "inning": inning,
+                    "type": "scoring_play",
+                    "description": description,
+                    "away_score": away_score,
+                    "home_score": home_score,
+                    "batter": batter_name,
+                })
+            
+            # Track home runs specifically
+            if event_type == "home_run":
+                key_moments.append({
+                    "inning": inning,
+                    "type": "home_run",
+                    "player": batter_name,
+                    "description": description,
+                })
+            
+            # Track important pitcher moments (strikeouts in tight games)
+            if event_type == "strikeout" and inning >= 7 and abs((home_score or 0) - (away_score or 0)) <= 1:
+                key_moments.append({
+                    "inning": inning,
+                    "type": "strikeout",
+                    "pitcher": pitcher_name,
+                    "batter": batter_name,
+                    "description": description,
+                })
+            
+            # Track inning progression
+            if away_score is not None and home_score is not None:
+                if inning not in inning_progression:
+                    inning_progression[inning] = {"away": away_score, "home": home_score}
+        
+        return {
+            "key_moments_count": len(key_moments),
+            "key_moments": key_moments[:15],  # Limit to top 15 moments
+            "total_plays": len(plays),
+            "inning_progression": inning_progression,
+        }

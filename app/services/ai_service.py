@@ -8,11 +8,14 @@ consistent, parseable JSON output that matches our Pydantic models.
 
 import json
 import time
-from typing import Optional
+from pathlib import Path
+from typing import Optional, Union
 
 import anthropic
+import httpx
 
 from app.config import get_settings
+from app.constants import DEFAULT_ANTHROPIC_MODEL
 from app.models.game import GameBoxscore, GameSummary, TopPerformer
 from app.models.analysis import MatchupAnalysis, AIGenerationMetadata
 
@@ -26,8 +29,27 @@ class AIService:
     """
     
     def __init__(self) -> None:
-        self.client = anthropic.Anthropic(api_key=get_settings().anthropic_api_key)
-        self.model = "claude-sonnet-4-20250514"
+        settings = get_settings()
+        verify_config: Union[bool, str] = settings.anthropic_ssl_verify
+        if settings.anthropic_ca_bundle_path:
+            verify_config = str(Path(settings.anthropic_ca_bundle_path).expanduser())
+
+        try:
+            # Try passing httpx client (for older/local Anthropic SDK versions)
+            # This allows custom SSL verification and timeout config
+            http_client = httpx.Client(timeout=30.0, verify=verify_config)
+            self.client = anthropic.Anthropic(
+                api_key=settings.anthropic_api_key,
+                http_client=http_client,
+            )
+        except TypeError:
+            # Fall back to basic init if SDK doesn't accept http_client
+            # (newer SDK versions on CI require httpx2 or handle it differently)
+            self.client = anthropic.Anthropic(
+                api_key=settings.anthropic_api_key,
+            )
+        
+        self.model = settings.copilot_model or DEFAULT_ANTHROPIC_MODEL
     
     async def generate_game_summary(
         self,

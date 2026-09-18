@@ -6,6 +6,8 @@ from datetime import datetime
 from typing import Optional
 from pydantic import BaseModel, Field
 
+from app.constants import DEFAULT_ANTHROPIC_MODEL
+
 
 class MatchupAnalysis(BaseModel):
     """AI-generated batter vs pitcher matchup analysis."""
@@ -68,8 +70,156 @@ class AIGenerationRequest(BaseModel):
 
 class AIGenerationMetadata(BaseModel):
     """Metadata about an AI generation response."""
-    model: str = "claude-sonnet-4-20250514"
+    model: str = DEFAULT_ANTHROPIC_MODEL
     tokens_used: int
     generation_time_ms: int
     cached: bool
     cache_key: Optional[str] = None
+
+
+# ============================================================================
+# Copilot Contract Models (v1) — Public Data Grounded AI
+# ============================================================================
+
+
+class Citation(BaseModel):
+    """
+    Source citation for grounded claims in a copilot response.
+    
+    Maps claims back to evidence: either retrieved documents or tool outputs.
+    """
+    source_id: str = Field(
+        ..., 
+        description="Unique ID for the source (URL, tool_name:result_id, etc.)"
+    )
+    source_type: str = Field(
+        ..., 
+        description="'document' (RAG), 'tool' (deterministic), or 'knowledge'"
+    )
+    title: str = Field(..., description="Source title or tool name")
+    url: Optional[str] = Field(None, description="URL if document source")
+    snippet: str = Field(
+        ..., 
+        description="Relevant excerpt supporting the claim (50-200 chars)"
+    )
+    section: Optional[str] = Field(None, description="Section/heading within source")
+
+
+class ToolCall(BaseModel):
+    """
+    Record of a tool invocation in the orchestration flow.
+    
+    Tracks what was called, with what inputs, and the result state.
+    """
+    tool_name: str = Field(..., description="e.g., 'get_game_summary', 'get_player_stats'")
+    input_summary: str = Field(
+        ..., 
+        description="Human-readable summary of tool inputs (e.g., 'playerId=545361, season=2024')"
+    )
+    success: bool = Field(..., description="Whether the tool call succeeded")
+    error_message: Optional[str] = Field(None, description="Error details if failed")
+    latency_ms: int = Field(..., description="Wall-clock execution time")
+    cached: bool = Field(default=False, description="Whether result came from cache")
+
+
+class ModelInfo(BaseModel):
+    """Information about the LLM used for generation."""
+    provider: str = Field(default="anthropic", description="e.g., 'anthropic', 'openai'")
+    model_name: str = Field(default=DEFAULT_ANTHROPIC_MODEL)
+    prompt_tokens: int = Field(default=0)
+    completion_tokens: int = Field(default=0)
+    total_tokens: int = Field(default=0)
+
+
+class TimingInfo(BaseModel):
+    """Latency breakdown by orchestration stage."""
+    total_ms: int = Field(..., description="Total end-to-end latency")
+    orchestration_ms: int = Field(
+        default=0, 
+        description="Time to decide routing (tool vs. RAG vs. hybrid)"
+    )
+    tools_ms: int = Field(default=0, description="Total tool execution time")
+    retrieval_ms: int = Field(default=0, description="RAG retrieval time")
+    model_ms: int = Field(default=0, description="LLM inference time")
+    synthesis_ms: int = Field(
+        default=0, 
+        description="Time to format final response"
+    )
+
+
+class CopilotRequest(BaseModel):
+    """
+    Request contract for the /copilot/query endpoint.
+    
+    Supports all three query classes: tool-only, rag-only, hybrid.
+    """
+    query: str = Field(..., description="User question or statement")
+    context: Optional[dict] = Field(
+        None,
+        description="Optional context: game_id, team_id, player_id, season, etc."
+    )
+    mode: str = Field(
+        default="auto",
+        description="'auto' (infer), 'tool', 'rag', or 'hybrid'"
+    )
+    session_id: Optional[str] = Field(
+        None,
+        description="Optional conversation session ID for multi-turn context"
+    )
+    max_tokens: int = Field(
+        default=1024,
+        ge=100,
+        le=4096,
+        description="Output token budget"
+    )
+    temperature: float = Field(
+        default=0.7,
+        ge=0.0,
+        le=1.0,
+        description="Sampling temperature"
+    )
+
+
+class CopilotResponse(BaseModel):
+    """
+    Response contract from the /copilot/query endpoint.
+    
+    Includes answer, evidence sources, tool invocations, and observability data.
+    """
+    request_id: str = Field(
+        ..., 
+        description="Unique ID for trace correlation"
+    )
+    answer: str = Field(
+        ..., 
+        description="Final natural-language response to user query"
+    )
+    citations: list[Citation] = Field(
+        default_factory=list,
+        description="Sources and evidence backing claims"
+    )
+    tools_used: list[ToolCall] = Field(
+        default_factory=list,
+        description="All tool invocations during orchestration"
+    )
+    model_info: ModelInfo = Field(
+        ..., 
+        description="LLM metadata (tokens, model, provider)"
+    )
+    timing: TimingInfo = Field(
+        ..., 
+        description="Latency breakdown by stage"
+    )
+    confidence: str = Field(
+        default="medium",
+        description="'high', 'medium', 'low' — sufficiency of evidence"
+    )
+    warnings: list[str] = Field(
+        default_factory=list,
+        description="Fallback notes, uncertainty flags, partial-data signals"
+    )
+    query_mode: str = Field(
+        ..., 
+        description="Route taken: 'tool', 'rag', or 'hybrid'"
+    )
+    generated_at: datetime = Field(default_factory=datetime.utcnow)

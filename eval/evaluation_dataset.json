@@ -1,0 +1,775 @@
+{
+  "metadata": {
+    "version": "1.0",
+    "created_date": "2026-09-16",
+    "total_prompts": 40,
+    "categories": {
+      "tool": 15,
+      "rag": 15,
+      "hybrid": 10
+    },
+    "description": "Evaluation dataset for Copilot v1 readiness. Tests correctness, groundedness, and citation accuracy."
+  },
+  "prompts": {
+    "tool_queries": [
+      {
+        "id": "tool_001",
+        "query": "What was the score of the Yankees vs Orioles game on September 15, 2026?",
+        "context": {
+          "sport": "baseball",
+          "focus": "live_score"
+        },
+        "expected_answer": "Contains score for Yankees vs Orioles on 2026-09-15",
+        "grounding_rules": [
+          "Must cite tool:get_game_summary",
+          "Score must be from StatsAPI"
+        ],
+        "acceptance_criteria": {
+          "correctness": "high",
+          "has_citations": true,
+          "min_citation_count": 1
+        }
+      },
+      {
+        "id": "tool_002",
+        "query": "How many home runs did Mike Trout have in the 2024 season?",
+        "context": {
+          "player_id": 545361,
+          "season": 2024,
+          "focus": "player_stats"
+        },
+        "expected_answer": "Contains player stats including HR count for 2024",
+        "grounding_rules": [
+          "Must cite tool:get_player_stat_split",
+          "Stats must be from StatsAPI"
+        ],
+        "acceptance_criteria": {
+          "correctness": "high",
+          "has_citations": true,
+          "min_citation_count": 1
+        }
+      },
+      {
+        "id": "tool_003",
+        "query": "List the Los Angeles Dodgers games for September 2026",
+        "context": {
+          "team_id": 119,
+          "start_date": "2026-09-01",
+          "end_date": "2026-09-30",
+          "focus": "team_schedule"
+        },
+        "expected_answer": "Contains list of Dodgers games in September 2026",
+        "grounding_rules": [
+          "Must cite tool:get_team_schedule",
+          "Games must span the date range"
+        ],
+        "acceptance_criteria": {
+          "correctness": "high",
+          "has_citations": true,
+          "min_citation_count": 1
+        }
+      },
+      {
+        "id": "tool_004",
+        "query": "What's Aaron Judge's batting average in the 2024 season?",
+        "context": {
+          "player_id": 592450,
+          "season": 2024,
+          "focus": "player_stats"
+        },
+        "expected_answer": "Contains Aaron Judge's batting average for 2024",
+        "grounding_rules": [
+          "Must cite tool:get_player_stat_split",
+          "Must include AVG metric"
+        ],
+        "acceptance_criteria": {
+          "correctness": "high",
+          "has_citations": true,
+          "min_citation_count": 1
+        }
+      },
+      {
+        "id": "tool_005",
+        "query": "How many RBIs does Juan Soto have this season?",
+        "context": {
+          "player_id": 665742,
+          "season": 2026,
+          "focus": "player_stats"
+        },
+        "expected_answer": "Contains Juan Soto's RBI count for 2026",
+        "grounding_rules": [
+          "Must cite tool:get_player_stat_split",
+          "Must include RBI metric"
+        ],
+        "acceptance_criteria": {
+          "correctness": "high",
+          "has_citations": true,
+          "min_citation_count": 1
+        }
+      },
+      {
+        "id": "tool_006",
+        "query": "What's the status of tonight's Red Sox game?",
+        "context": {
+          "team_id": 111,
+          "focus": "game_status"
+        },
+        "expected_answer": "Contains game status (scheduled, live, final, etc.)",
+        "grounding_rules": [
+          "Must cite tool:get_game_summary or get_team_schedule",
+          "Status must be current/recent"
+        ],
+        "acceptance_criteria": {
+          "correctness": "medium",
+          "has_citations": true,
+          "min_citation_count": 1
+        }
+      },
+      {
+        "id": "tool_007",
+        "query": "How many home runs has Bryce Harper hit this season?",
+        "context": {
+          "player_id": 547180,
+          "season": 2026,
+          "focus": "player_stats"
+        },
+        "expected_answer": "Contains Bryce Harper's HR count for 2026",
+        "grounding_rules": [
+          "Must cite tool:get_player_stat_split",
+          "HR count must be accurate from StatsAPI"
+        ],
+        "acceptance_criteria": {
+          "correctness": "high",
+          "has_citations": true,
+          "min_citation_count": 1
+        }
+      },
+      {
+        "id": "tool_008",
+        "query": "What teams play on September 20, 2026?",
+        "context": {
+          "date": "2026-09-20",
+          "focus": "games_by_date"
+        },
+        "expected_answer": "Contains list of teams/games scheduled for that date",
+        "grounding_rules": [
+          "Must cite tool:get_team_schedule or similar",
+          "Games must be on specified date"
+        ],
+        "acceptance_criteria": {
+          "correctness": "high",
+          "has_citations": true,
+          "min_citation_count": 1
+        }
+      },
+      {
+        "id": "tool_009",
+        "query": "Show me Mookie Betts' stats for 2024",
+        "context": {
+          "player_id": 605141,
+          "season": 2024,
+          "focus": "player_stats"
+        },
+        "expected_answer": "Contains comprehensive stats for Mookie Betts in 2024",
+        "grounding_rules": [
+          "Must cite tool:get_player_stat_split",
+          "Must include HR, AVG, RBI metrics"
+        ],
+        "acceptance_criteria": {
+          "correctness": "high",
+          "has_citations": true,
+          "min_citation_count": 1
+        }
+      },
+      {
+        "id": "tool_010",
+        "query": "Did the Boston Red Sox win their last game?",
+        "context": {
+          "team_id": 111,
+          "focus": "recent_game_result"
+        },
+        "expected_answer": "Contains whether Red Sox won/lost their most recent game",
+        "grounding_rules": [
+          "Must cite tool:get_team_schedule or get_game_summary",
+          "Result must be from most recent completed game"
+        ],
+        "acceptance_criteria": {
+          "correctness": "high",
+          "has_citations": true,
+          "min_citation_count": 1
+        }
+      },
+      {
+        "id": "tool_011",
+        "query": "What's Gerrit Cole's ERA this season?",
+        "context": {
+          "player_id": 543037,
+          "season": 2026,
+          "focus": "pitcher_stats"
+        },
+        "expected_answer": "Contains Gerrit Cole's ERA for 2026",
+        "grounding_rules": [
+          "Must cite tool:get_player_stat_split (pitching)",
+          "Must include ERA metric"
+        ],
+        "acceptance_criteria": {
+          "correctness": "high",
+          "has_citations": true,
+          "min_citation_count": 1
+        }
+      },
+      {
+        "id": "tool_012",
+        "query": "How many wins does Shohei Ohtani have as a pitcher this season?",
+        "context": {
+          "player_id": 660271,
+          "season": 2026,
+          "split_type": "pitching",
+          "focus": "pitcher_stats"
+        },
+        "expected_answer": "Contains Shohei Ohtani's pitching wins for 2026",
+        "grounding_rules": [
+          "Must cite tool:get_player_stat_split",
+          "Must filter for pitching stats (not hitting)"
+        ],
+        "acceptance_criteria": {
+          "correctness": "high",
+          "has_citations": true,
+          "min_citation_count": 1
+        }
+      },
+      {
+        "id": "tool_013",
+        "query": "List all Toronto Blue Jays games for October 2026",
+        "context": {
+          "team_id": 141,
+          "start_date": "2026-10-01",
+          "end_date": "2026-10-31",
+          "focus": "team_schedule"
+        },
+        "expected_answer": "Contains list of Blue Jays games in October 2026",
+        "grounding_rules": [
+          "Must cite tool:get_team_schedule",
+          "Games must fall within October date range"
+        ],
+        "acceptance_criteria": {
+          "correctness": "high",
+          "has_citations": true,
+          "min_citation_count": 1
+        }
+      },
+      {
+        "id": "tool_014",
+        "query": "What's the final score from yesterday's Yankees game?",
+        "context": {
+          "team_id": 147,
+          "focus": "recent_game_result"
+        },
+        "expected_answer": "Contains final score from Yankees' most recent game",
+        "grounding_rules": [
+          "Must cite tool:get_game_summary or get_team_schedule",
+          "Must be from a completed/final game"
+        ],
+        "acceptance_criteria": {
+          "correctness": "high",
+          "has_citations": true,
+          "min_citation_count": 1
+        }
+      },
+      {
+        "id": "tool_015",
+        "query": "How many strikeouts does Clayton Kershaw have this season?",
+        "context": {
+          "player_id": 477132,
+          "season": 2026,
+          "focus": "pitcher_stats"
+        },
+        "expected_answer": "Contains Clayton Kershaw's strikeout count for 2026",
+        "grounding_rules": [
+          "Must cite tool:get_player_stat_split",
+          "Must include K (strikeout) metric"
+        ],
+        "acceptance_criteria": {
+          "correctness": "high",
+          "has_citations": true,
+          "min_citation_count": 1
+        }
+      }
+    ],
+    "rag_queries": [
+      {
+        "id": "rag_001",
+        "query": "What is the infield fly rule in baseball?",
+        "context": {
+          "focus": "rules"
+        },
+        "expected_answer": "Explains the infield fly rule and when it applies",
+        "grounding_rules": [
+          "Must cite document source (rules_infield_fly)",
+          "Must explain the rule's purpose and application"
+        ],
+        "acceptance_criteria": {
+          "correctness": "high",
+          "has_citations": true,
+          "citation_source_type": "document",
+          "min_citation_count": 1
+        }
+      },
+      {
+        "id": "rag_002",
+        "query": "Explain the designated hitter rule in Major League Baseball",
+        "context": {
+          "focus": "rules"
+        },
+        "expected_answer": "Describes the designated hitter rule and its history",
+        "grounding_rules": [
+          "Must cite document source (rules_designated_hitter)",
+          "Should explain why the rule exists"
+        ],
+        "acceptance_criteria": {
+          "correctness": "high",
+          "has_citations": true,
+          "citation_source_type": "document",
+          "min_citation_count": 1
+        }
+      },
+      {
+        "id": "rag_003",
+        "query": "What makes a strike in baseball?",
+        "context": {
+          "focus": "rules"
+        },
+        "expected_answer": "Defines strike zone and what constitutes a strike",
+        "grounding_rules": [
+          "Must cite document source (rules_strikes_balls)",
+          "Must explain strike zone boundaries"
+        ],
+        "acceptance_criteria": {
+          "correctness": "high",
+          "has_citations": true,
+          "citation_source_type": "document",
+          "min_citation_count": 1
+        }
+      },
+      {
+        "id": "rag_004",
+        "query": "Explain what a double play is in baseball",
+        "context": {
+          "focus": "rules"
+        },
+        "expected_answer": "Describes double play mechanics and examples",
+        "grounding_rules": [
+          "Must cite document source (rules_double_play)",
+          "Should provide common scenarios"
+        ],
+        "acceptance_criteria": {
+          "correctness": "high",
+          "has_citations": true,
+          "citation_source_type": "document",
+          "min_citation_count": 1
+        }
+      },
+      {
+        "id": "rag_005",
+        "query": "Who has hit the most home runs in World Series history?",
+        "context": {
+          "focus": "history"
+        },
+        "expected_answer": "Names player with most World Series home runs",
+        "grounding_rules": [
+          "Must cite document source (history_records_achievements or history_world_series)",
+          "Must provide accurate historical fact"
+        ],
+        "acceptance_criteria": {
+          "correctness": "high",
+          "has_citations": true,
+          "citation_source_type": "document",
+          "min_citation_count": 1
+        }
+      },
+      {
+        "id": "rag_006",
+        "query": "What is the all-time record for home runs in MLB?",
+        "context": {
+          "focus": "records"
+        },
+        "expected_answer": "Cites Barry Bonds's home run record",
+        "grounding_rules": [
+          "Must cite document source (history_records_achievements)",
+          "Must name the record holder and count"
+        ],
+        "acceptance_criteria": {
+          "correctness": "high",
+          "has_citations": true,
+          "citation_source_type": "document",
+          "min_citation_count": 1
+        }
+      },
+      {
+        "id": "rag_007",
+        "query": "What does WAR mean in baseball statistics?",
+        "context": {
+          "focus": "sabermetrics"
+        },
+        "expected_answer": "Explains WAR (Wins Above Replacement) metric",
+        "grounding_rules": [
+          "Must cite document source (stats_sabermetrics)",
+          "Should explain how it measures player value"
+        ],
+        "acceptance_criteria": {
+          "correctness": "high",
+          "has_citations": true,
+          "citation_source_type": "document",
+          "min_citation_count": 1
+        }
+      },
+      {
+        "id": "rag_008",
+        "query": "How are MLB teams organized into divisions and leagues?",
+        "context": {
+          "focus": "league_structure"
+        },
+        "expected_answer": "Describes AL/NL structure and divisions",
+        "grounding_rules": [
+          "Must cite document source (structure_league_teams)",
+          "Should explain current division setup"
+        ],
+        "acceptance_criteria": {
+          "correctness": "high",
+          "has_citations": true,
+          "citation_source_type": "document",
+          "min_citation_count": 1
+        }
+      },
+      {
+        "id": "rag_009",
+        "query": "Who won the 2020 World Series?",
+        "context": {
+          "focus": "world_series_history"
+        },
+        "expected_answer": "Names Los Angeles Dodgers as 2020 World Series winner",
+        "grounding_rules": [
+          "Must cite document source (history_world_series)",
+          "Must be factually accurate"
+        ],
+        "acceptance_criteria": {
+          "correctness": "high",
+          "has_citations": true,
+          "citation_source_type": "document",
+          "min_citation_count": 1
+        }
+      },
+      {
+        "id": "rag_010",
+        "query": "Explain sabermetrics and its impact on modern baseball",
+        "context": {
+          "focus": "sabermetrics"
+        },
+        "expected_answer": "Discusses sabermetrics principles and MLB adoption",
+        "grounding_rules": [
+          "Must cite document source (stats_sabermetrics)",
+          "Should explain how analytics changed the game"
+        ],
+        "acceptance_criteria": {
+          "correctness": "high",
+          "has_citations": true,
+          "citation_source_type": "document",
+          "min_citation_count": 1
+        }
+      },
+      {
+        "id": "rag_011",
+        "query": "What is OPS and how is it calculated in baseball?",
+        "context": {
+          "focus": "sabermetrics"
+        },
+        "expected_answer": "Defines OPS (On-base Plus Slugging) metric",
+        "grounding_rules": [
+          "Must cite document source (stats_sabermetrics)",
+          "Should explain calculation or significance"
+        ],
+        "acceptance_criteria": {
+          "correctness": "high",
+          "has_citations": true,
+          "citation_source_type": "document",
+          "min_citation_count": 1
+        }
+      },
+      {
+        "id": "rag_012",
+        "query": "How many teams are in Major League Baseball?",
+        "context": {
+          "focus": "league_structure"
+        },
+        "expected_answer": "States there are 30 MLB teams",
+        "grounding_rules": [
+          "Must cite document source (structure_league_teams)",
+          "Must provide accurate team count"
+        ],
+        "acceptance_criteria": {
+          "correctness": "high",
+          "has_citations": true,
+          "citation_source_type": "document",
+          "min_citation_count": 1
+        }
+      },
+      {
+        "id": "rag_013",
+        "query": "What's the history of the World Series?",
+        "context": {
+          "focus": "history"
+        },
+        "expected_answer": "Provides overview of World Series history and significance",
+        "grounding_rules": [
+          "Must cite document source (history_world_series)",
+          "Should mention founding year or notable milestones"
+        ],
+        "acceptance_criteria": {
+          "correctness": "medium",
+          "has_citations": true,
+          "citation_source_type": "document",
+          "min_citation_count": 1
+        }
+      },
+      {
+        "id": "rag_014",
+        "query": "Name three famous baseball records",
+        "context": {
+          "focus": "records"
+        },
+        "expected_answer": "Lists three notable baseball records with holders",
+        "grounding_rules": [
+          "Must cite document source (history_records_achievements)",
+          "Should provide accurate record information"
+        ],
+        "acceptance_criteria": {
+          "correctness": "high",
+          "has_citations": true,
+          "citation_source_type": "document",
+          "min_citation_count": 1
+        }
+      },
+      {
+        "id": "rag_015",
+        "query": "How does the strike zone work in baseball?",
+        "context": {
+          "focus": "rules"
+        },
+        "expected_answer": "Explains strike zone dimensions and application",
+        "grounding_rules": [
+          "Must cite document source (rules_strikes_balls)",
+          "Should describe height and horizontal boundaries"
+        ],
+        "acceptance_criteria": {
+          "correctness": "high",
+          "has_citations": true,
+          "citation_source_type": "document",
+          "min_citation_count": 1
+        }
+      }
+    ],
+    "hybrid_queries": [
+      {
+        "id": "hybrid_001",
+        "query": "What's Mike Trout's 2024 home run total and how does that rank historically?",
+        "context": {
+          "player_id": 545361,
+          "season": 2024,
+          "focus": "stats_and_history"
+        },
+        "expected_answer": "Provides Trout's 2024 HR count and contextualizes against historical records",
+        "grounding_rules": [
+          "Must cite tool:get_player_stat_split for current stats",
+          "Must cite document source (history_records_achievements) for context",
+          "Should clearly separate fact (tool) from context (doc)"
+        ],
+        "acceptance_criteria": {
+          "correctness": "high",
+          "has_citations": true,
+          "min_citation_count": 2,
+          "citation_mix": ["tool", "document"]
+        }
+      },
+      {
+        "id": "hybrid_002",
+        "query": "Did the Red Sox win today and how important is winning streaks in baseball?",
+        "context": {
+          "team_id": 111,
+          "focus": "recent_result_and_strategy"
+        },
+        "expected_answer": "States game result and explains winning streaks concept",
+        "grounding_rules": [
+          "Must cite tool for game result",
+          "Must cite document for strategy/history context",
+          "Should explain why streaks matter"
+        ],
+        "acceptance_criteria": {
+          "correctness": "high",
+          "has_citations": true,
+          "min_citation_count": 2,
+          "citation_mix": ["tool", "document"]
+        }
+      },
+      {
+        "id": "hybrid_003",
+        "query": "What's Shohei Ohtani's current pitching stats and how do modern analytics evaluate pitchers?",
+        "context": {
+          "player_id": 660271,
+          "season": 2026,
+          "focus": "stats_and_analytics"
+        },
+        "expected_answer": "Provides Ohtani's stats and explains sabermetrics for pitchers",
+        "grounding_rules": [
+          "Must cite tool:get_player_stat_split for pitching stats",
+          "Must cite document for sabermetrics explanation",
+          "Should mention metrics like ERA or WAR"
+        ],
+        "acceptance_criteria": {
+          "correctness": "high",
+          "has_citations": true,
+          "min_citation_count": 2,
+          "citation_mix": ["tool", "document"]
+        }
+      },
+      {
+        "id": "hybrid_004",
+        "query": "List Yankees games this month and explain how the infield fly rule affects gameplay",
+        "context": {
+          "team_id": 147,
+          "focus": "schedule_and_rules"
+        },
+        "expected_answer": "Provides Yankees schedule and explains infield fly rule mechanics",
+        "grounding_rules": [
+          "Must cite tool:get_team_schedule for games",
+          "Must cite document for rule explanation",
+          "Should provide practical rule example"
+        ],
+        "acceptance_criteria": {
+          "correctness": "high",
+          "has_citations": true,
+          "min_citation_count": 2,
+          "citation_mix": ["tool", "document"]
+        }
+      },
+      {
+        "id": "hybrid_005",
+        "query": "How many home runs did Aaron Judge hit in 2024 and what's the all-time home run record?",
+        "context": {
+          "player_id": 592450,
+          "season": 2024,
+          "focus": "stats_and_records"
+        },
+        "expected_answer": "Provides Judge's 2024 HR total and names all-time record holder",
+        "grounding_rules": [
+          "Must cite tool:get_player_stat_split for Judge's stats",
+          "Must cite document for all-time record",
+          "Should put stats in historical context"
+        ],
+        "acceptance_criteria": {
+          "correctness": "high",
+          "has_citations": true,
+          "min_citation_count": 2,
+          "citation_mix": ["tool", "document"]
+        }
+      },
+      {
+        "id": "hybrid_006",
+        "query": "What's Clayton Kershaw's ERA this season and how does ERA as a metric work?",
+        "context": {
+          "player_id": 477132,
+          "season": 2026,
+          "focus": "stats_and_metrics"
+        },
+        "expected_answer": "Provides Kershaw's ERA and explains the metric",
+        "grounding_rules": [
+          "Must cite tool:get_player_stat_split for Kershaw's ERA",
+          "Could cite document for sabermetrics context",
+          "Should explain ERA calculation or significance"
+        ],
+        "acceptance_criteria": {
+          "correctness": "high",
+          "has_citations": true,
+          "min_citation_count": 1
+        }
+      },
+      {
+        "id": "hybrid_007",
+        "query": "Which MLB divisions exist today and show me a sample team from each?",
+        "context": {
+          "focus": "structure_and_examples"
+        },
+        "expected_answer": "Describes division structure and provides team examples",
+        "grounding_rules": [
+          "Must cite document for division structure",
+          "Could cite tool or knowledge for team examples",
+          "Should show current AL/NL organization"
+        ],
+        "acceptance_criteria": {
+          "correctness": "high",
+          "has_citations": true,
+          "min_citation_count": 1
+        }
+      },
+      {
+        "id": "hybrid_008",
+        "query": "What's the Dodgers' record this season and how has consistency been important to their World Series wins?",
+        "context": {
+          "team_id": 119,
+          "focus": "record_and_history"
+        },
+        "expected_answer": "Provides current record and discusses Dodgers' championship consistency",
+        "grounding_rules": [
+          "Must cite tool or schedule for current record",
+          "Must cite document for World Series history",
+          "Should connect recent performance to historical success"
+        ],
+        "acceptance_criteria": {
+          "correctness": "high",
+          "has_citations": true,
+          "min_citation_count": 2,
+          "citation_mix": ["tool", "document"]
+        }
+      },
+      {
+        "id": "hybrid_009",
+        "query": "Show Bryce Harper's stats and explain how modern analytics changed how teams evaluate hitters",
+        "context": {
+          "player_id": 547180,
+          "season": 2026,
+          "focus": "stats_and_analytics"
+        },
+        "expected_answer": "Provides Harper's stats and discusses sabermetrics impact",
+        "grounding_rules": [
+          "Must cite tool:get_player_stat_split for recent stats",
+          "Must cite document for sabermetrics/analytics explanation",
+          "Should explain modern evaluation methods"
+        ],
+        "acceptance_criteria": {
+          "correctness": "high",
+          "has_citations": true,
+          "min_citation_count": 2,
+          "citation_mix": ["tool", "document"]
+        }
+      },
+      {
+        "id": "hybrid_010",
+        "query": "What was the score of the last Yankees game and how unusual would a score like that be?",
+        "context": {
+          "team_id": 147,
+          "focus": "result_and_context"
+        },
+        "expected_answer": "Provides recent Yankees score and contextualizes its significance",
+        "grounding_rules": [
+          "Must cite tool:get_game_summary for recent game",
+          "Should provide analysis of score significance",
+          "Could cite history/stats for context"
+        ],
+        "acceptance_criteria": {
+          "correctness": "high",
+          "has_citations": true,
+          "min_citation_count": 1
+        }
+      }
+    ]
+  }
+}
