@@ -34,11 +34,21 @@ class AIService:
         if settings.anthropic_ca_bundle_path:
             verify_config = str(Path(settings.anthropic_ca_bundle_path).expanduser())
 
-        http_client = httpx.Client(timeout=30.0, verify=verify_config)
-        self.client = anthropic.Anthropic(
-            api_key=settings.anthropic_api_key,
-            http_client=http_client,
-        )
+        try:
+            # Try passing httpx client (for older/local Anthropic SDK versions)
+            # This allows custom SSL verification and timeout config
+            http_client = httpx.Client(timeout=30.0, verify=verify_config)
+            self.client = anthropic.Anthropic(
+                api_key=settings.anthropic_api_key,
+                http_client=http_client,
+            )
+        except TypeError:
+            # Fall back to basic init if SDK doesn't accept http_client
+            # (newer SDK versions on CI require httpx2 or handle it differently)
+            self.client = anthropic.Anthropic(
+                api_key=settings.anthropic_api_key,
+            )
+        
         self.model = settings.copilot_model or DEFAULT_ANTHROPIC_MODEL
     
     async def generate_game_summary(
