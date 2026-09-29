@@ -1,0 +1,80 @@
+graph TD
+    subgraph InitSub["1️⃣ VAPID Setup & Subscription"]
+        A["🎮 User on Game Page"] -->|Enable| B["Request Browser Subscription"]
+        B -->|Fetch Key| C["Get VAPID Public Key"]
+        C -->|Public Key| D["Browser Generates<br/>Subscription Keys"]
+        D -->|Register| E["Store Subscription<br/>endpoint, p256dh, auth"]
+        E -->|Save| F["Database"]
+        F -->|Success| G["✅ Notifications Enabled"]
+    end
+    
+    subgraph PollingLoop["2️⃣ Backend Polling Loop"]
+        H["🔄 Polling Loop<br/>Every 10 seconds"]
+        H -->|Check| I["Query subscribed games"]
+        I -->|Fetch| J["Get MLB Game Feed"]
+        J -->|Parse| K["Extract scoring plays<br/>and at-bat index"]
+        K -->|Compare| L["Diff against<br/>last seen play"]
+        L -->|New Plays?| M{Plays Found?}
+        M -->|No| N["Update cursor<br/>Check if game ended"]
+        M -->|Yes| O["For each new play:<br/>prepare notification"]
+        O -->|Sign| P["VAPID-sign<br/>JWT token"]
+        P -->|Encrypt| Q["AES-GCM Encrypt<br/>with subscription keys"]
+        Q -->|Deliver| R["Send to Push Service"]
+        R -->|Status| S{Result?}
+        S -->|✅ Sent| T["Update play cursor"]
+        S -->|⚠️ Expired| U["Remove subscription"]
+        S -->|❌ Failed| V["Mark expired"]
+        T --> N
+        U --> N
+        V --> N
+        N -->|Game Ended?| W{Final?}
+        W -->|Yes| X["Clean up<br/>all subscriptions"]
+        W -->|No| Y["Sleep 10s<br/>Loop again"]
+        X --> Y
+    end
+    
+    subgraph BrowserDelivery["3️⃣ Browser Delivery & User Interaction"]
+        Z["Push Service<br/>delivers payload"]
+        Z -->|Receive| AA["Service Worker<br/>intercepts push"]
+        AA -->|Decrypt| AB["Decrypt with<br/>stored keys"]
+        AB -->|Show| AC["Display notification"]
+        AC -->|Display| AD["🔔 Notification<br/>appears on device"]
+        AD -->|Tap| AE["User clicks<br/>notification"]
+        AE -->|Focus| AF["Switch to game tab"]
+        AF -->|End| AG["✅ Notification<br/>delivered"]
+    end
+    
+    G -.->|Recurring| H
+    Y -.->|Meanwhile| Z
+    
+    style A fill:#e1f5ff,color:#000
+    style G fill:#c8e6c9,color:#000
+    style AG fill:#c8e6c9,color:#000
+    style AD fill:#fff9c4,color:#000
+    
+    classDef initStyle fill:#e3f2fd,stroke:#1976d2,stroke-width:2px,color:#000
+    classDef pollingStyle fill:#f3e5f5,stroke:#7b1fa2,stroke-width:2px,color:#000
+    classDef deliveryStyle fill:#ffccbc,stroke:#bf360c,stroke-width:2px,color:#000
+    
+    class InitSub initStyle
+    class PollingLoop pollingStyle
+    class BrowserDelivery deliveryStyle
+    
+    style A fill:#e1f5ff,color:#000
+    style J fill:#c8e6c9,color:#000
+    style AF fill:#fff9c4,color:#000
+    style AI fill:#c8e6c9,color:#000
+    style K fill:#f3e5f5,color:#000
+    style G fill:#ffe0b2,color:#000
+    style S fill:#ffccbc,color:#000
+    style T fill:#ffccbc,color:#000
+    style U fill:#ffccbc,color:#000
+    
+    classDef frontend fill:#e3f2fd,stroke:#1976d2,stroke-width:2px,color:#000
+    classDef backend fill:#f3e5f5,stroke:#7b1fa2,stroke-width:2px,color:#000
+    classDef database fill:#ffe0b2,stroke:#e65100,stroke-width:2px,color:#000
+    classDef messaging fill:#ffccbc,stroke:#bf360c,stroke-width:2px,color:#000
+    
+    class B,C,D,E,F,H,I,J,AC,AD,AE,AF,AG,AH,AI frontend
+    class K,L,M,N,O,P,R,S,T,U,V,W,X,Y,Z,AA,AB backend
+    class G database

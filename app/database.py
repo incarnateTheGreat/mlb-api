@@ -124,6 +124,11 @@ async def init_db() -> None:
     Initialize database tables.
     Call this on app startup to ensure cache tables exist.
     """
+    # Models must be imported before create_all() so they register themselves
+    # on Base.metadata. Importing inside the function avoids a circular import
+    # (models import Base from this module).
+    from app.models import notifications  # noqa: F401
+
     engine = get_engine()
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)

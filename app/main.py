@@ -6,8 +6,11 @@ request validation via Pydantic, and native async support.
 Run with: uvicorn app.main:app --reload
 """
 
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 from typing import AsyncGenerator
+
+import asyncio
+import logging
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -15,7 +18,20 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.config import get_settings
 from app.database import init_db, close_db
 from app.middleware import CSRFMiddleware
-from app.routers import auth, games, players, matchups, analysis, standings, teams
+from app.routers import (
+    auth,
+    games,
+    players,
+    matchups,
+    analysis,
+    notifications,
+    standings,
+    teams,
+)
+from app.services import push_service
+from app.services.scoring_watcher import run_scoring_watcher
+
+logger = logging.getLogger(__name__)
 
 
 @asynccontextmanager
@@ -29,8 +45,29 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     """
     # Startup
     await init_db()
+
+    # The scoring play watcher polls MLB on the server's own schedule so push
+    # notifications can fire while every subscriber's browser is closed.
+    watcher_task: asyncio.Task | None = None
+    settings = get_settings()
+
+    if settings.watcher_enabled and push_service.is_push_configured():
+        watcher_task = asyncio.create_task(run_scoring_watcher())
+    elif settings.watcher_enabled:
+        logger.warning(
+            "Scoring watcher disabled: VAPID keys are not configured."
+        )
+
     yield
+
     # Shutdown
+    if watcher_task is not None:
+        watcher_task.cancel()
+
+        # The watcher re-raises CancelledError to stop; that's expected here.
+        with suppress(asyncio.CancelledError):
+            await watcher_task
+
     await close_db()
 
 
@@ -68,6 +105,7 @@ app.include_router(matchups.router, prefix="/matchups", tags=["matchups"])
 app.include_router(analysis.router, prefix="/analysis", tags=["analysis"])
 app.include_router(standings.router, prefix="/standings", tags=["standings"])
 app.include_router(teams.router, prefix="/teams", tags=["teams"])
+app.include_router(notifications.router)  # Routes are /notifications/*
 
 
 @app.get("/health")
