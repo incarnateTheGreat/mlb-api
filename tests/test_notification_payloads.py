@@ -9,9 +9,33 @@ Validates that the new notification format includes:
 - Final game notifications
 """
 
+from unittest.mock import patch
+
 import pytest
 
+from app.services import push_service
 from app.services.scoring_watcher import _ordinal, _build_payload, _build_final_payload
+
+
+class TestPushUrgency:
+    """Every push must go out at high urgency.
+
+    Android defers normal-urgency messages while the device is in Doze, which
+    delays alerts on a locked phone until the user reopens the app.
+    """
+
+    def test_send_sync_sets_high_urgency(self):
+        subscription_info = {
+            "endpoint": "https://fcm.googleapis.com/fcm/send/abc123",
+            "keys": {"p256dh": "key", "auth": "auth"},
+        }
+
+        with patch.object(push_service, "webpush") as mock_webpush:
+            push_service._send_sync(subscription_info, '{"title": "test"}')
+
+        headers = mock_webpush.call_args.kwargs["headers"]
+
+        assert headers["Urgency"] == "high"
 
 
 class TestOrdinal:

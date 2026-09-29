@@ -54,6 +54,11 @@ def _send_sync(subscription_info: dict[str, Any], payload: str) -> None:
         vapid_private_key=settings.vapid_private_key,
         vapid_claims={"sub": settings.vapid_subject},
         ttl=600,  # Drop undelivered alerts after 10 minutes; stale scores are noise.
+        # RFC 8030 urgency. Push services map this to platform priority: on
+        # Android, FCM defers normal-urgency messages while the device is in
+        # Doze, so a locked phone would not see the alert until it woke up.
+        # "high" tells FCM to wake the device and deliver immediately.
+        headers={"Urgency": "high"},
     )
 
 
