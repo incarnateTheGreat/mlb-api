@@ -118,6 +118,30 @@ This system sends real-time push notifications to users' devices when scoring pl
          │                                  │     click handler)  │
 ```
 
+Phase 1: Subscription (Frontend → Backend)
+
+- User clicks notification bell
+- Browser creates PushSubscription with encryption keys
+- Frontend POSTs subscription data to backend
+- Backend stores in database
+
+Phase 2: Polling & Notifications (Backend Loop)
+
+- Every 10 seconds, watcher queries subscribed games
+- Fetches current game state from MLB API
+- Compares scoring plays against saved cursor
+- Builds notification payload (title, body, etc.)
+- VAPID-signs the JWT token (using private key)
+- AES-GCM encrypts payload (using subscription keys)
+- POSTs encrypted message to browser push service
+
+Phase 3: Delivery (Browser Display)
+
+- Push service wakes the browser's service worker
+- Service worker decrypts payload using stored keys
+- Displays notification with requireInteraction: true
+- User can click to focus the game tab
+
 ---
 
 ## How It Works
