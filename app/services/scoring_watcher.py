@@ -25,6 +25,20 @@ from app.services.mlb_client import get_mlb_client
 
 logger = logging.getLogger(__name__)
 
+# Games that actually finished. Postponed ("D"), cancelled ("C") and forfeited
+# ("Q"/"R") games also report abstractGameState "Final" but have no result to
+# announce - see https://statsapi.mlb.com/api/v1/gameStatus
+GENUINE_FINAL_CODES = frozenset({"O", "F"})  # "Game Over", "Final"
+
+# Ticks to keep retrying a failed final notification. Uncapped, a permanently
+# failing endpoint would hold its row - and so keep the watcher polling a
+# finished game - forever.
+MAX_FINAL_SEND_ATTEMPTS = 6
+
+# game_pk -> consecutive ticks on which the final notification failed. Held in
+# memory deliberately: losing it on restart just means a few extra retries.
+_final_attempts: dict[int, int] = {}
+
 
 def _ordinal(n: int) -> str:
     """Convert int to ordinal suffix (1st, 2nd, 3rd, 4th, etc.)."""
@@ -156,6 +170,85 @@ def _build_final_payload(
     }
 
 
+async def _handle_final(
+    db: AsyncSession,
+    game_pk: int,
+    feed: dict[str, Any],
+    status: dict[str, Any],
+    subscriptions: list[PushSubscription],
+    away_abbr: str,
+    home_abbr: str,
+) -> None:
+    """Announce the result if there is one, then stop tracking the game."""
+    coded_state = status.get("codedGameState", "")
+
+    if coded_state not in GENUINE_FINAL_CODES:
+        # Postponed, cancelled or forfeited. There is no score worth pushing,
+        # but the game is not coming back either, so drop the rows.
+        for subscription in subscriptions:
+            await db.delete(subscription)
+
+        _final_attempts.pop(game_pk, None)
+
+        logger.info(
+            "Game %s ended as %r; cleared %d subscriptions without notifying",
+            game_pk,
+            status.get("detailedState", coded_state),
+            len(subscriptions),
+        )
+
+        return
+
+    attempts = _final_attempts.get(game_pk, 0) + 1
+    give_up = attempts >= MAX_FINAL_SEND_ATTEMPTS
+    payload = _build_final_payload(feed, game_pk, away_abbr, home_abbr)
+    retry_wanted = False
+
+    for subscription in subscriptions:
+        result = await push_service.send_push(
+            endpoint=subscription.endpoint,
+            p256dh=subscription.p256dh,
+            auth=subscription.auth,
+            payload=payload,
+        )
+
+        if result == "failed" and not give_up:
+            # Keep the row so the next tick retries. The game stays final, so
+            # the retry sends an identical payload.
+            retry_wanted = True
+
+            continue
+
+        if result == "failed":
+            logger.error(
+                "Giving up on final notification for game %s after %d attempts",
+                game_pk,
+                attempts,
+            )
+        elif result == "sent":
+            logger.info(
+                "Sent final for game %s to %s",
+                game_pk,
+                subscription.endpoint[:40],
+            )
+
+        await db.delete(subscription)
+
+    if retry_wanted:
+        _final_attempts[game_pk] = attempts
+
+        logger.warning(
+            "Final notification for game %s incomplete; retrying (%d/%d)",
+            game_pk,
+            attempts,
+            MAX_FINAL_SEND_ATTEMPTS,
+        )
+    else:
+        _final_attempts.pop(game_pk, None)
+
+        logger.info("Game %s final, notified and cleared subscriptions", game_pk)
+
+
 async def _process_game(db: AsyncSession, game_pk: int) -> None:
     """Check one game and notify every subscriber that is behind."""
     subscriptions = list(
@@ -210,24 +303,18 @@ async def _process_game(db: AsyncSession, game_pk: int) -> None:
             home_abbr,
         )
 
-    # Once a game ends, send final notification and drop all subscriptions.
+    # Once a game ends there is nothing left to announce, so notify and stop
+    # tracking it.
     if abstract_state == "Final":
-        final_payload = _build_final_payload(feed, game_pk, away_abbr, home_abbr)
-
-        for subscription in subscriptions:
-            result = await push_service.send_push(
-                endpoint=subscription.endpoint,
-                p256dh=subscription.p256dh,
-                auth=subscription.auth,
-                payload=final_payload,
-            )
-
-            if result != "expired":
-                logger.debug("Sent final notification to subscription %s", subscription.endpoint[:40])
-
-            await db.delete(subscription)
-
-        logger.info("Game %s final, sent and cleared %d subscriptions", game_pk, len(subscriptions))
+        await _handle_final(
+            db,
+            game_pk,
+            feed,
+            status,
+            subscriptions,
+            away_abbr,
+            home_abbr,
+        )
 
     await db.commit()
 

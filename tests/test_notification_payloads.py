@@ -9,12 +9,18 @@ Validates that the new notification format includes:
 - Final game notifications
 """
 
-from unittest.mock import patch
+from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
 
 from app.services import push_service
-from app.services.scoring_watcher import _ordinal, _build_payload, _build_final_payload
+from app.services import scoring_watcher
+from app.services.scoring_watcher import (
+    _build_final_payload,
+    _build_payload,
+    _handle_final,
+    _ordinal,
+)
 
 
 class TestPushUrgency:
@@ -169,6 +175,137 @@ class TestBuildFinalPayload:
 
         assert payload["title"] == "Final"
         assert payload["body"] == "HOU 0 – SEA 0"  # Defaults to 0 runs
+
+
+def _subscription(endpoint: str = "https://push.example/abc"):
+    """A stand-in for a PushSubscription row."""
+    return Mock(endpoint=endpoint, p256dh="p", auth="a", game_pk=1)
+
+
+def _feed_with_score(away: int = 5, home: int = 3) -> dict:
+    return {
+        "liveData": {
+            "linescore": {"teams": {"away": {"runs": away}, "home": {"runs": home}}}
+        }
+    }
+
+
+class TestHandleFinal:
+    """Ending a game must notify exactly once, and only for real endings."""
+
+    def setup_method(self):
+        scoring_watcher._final_attempts.clear()
+
+    @pytest.mark.parametrize("coded_state", ["O", "F"])
+    async def test_genuine_final_notifies_and_clears(self, coded_state):
+        db = AsyncMock()
+        subscription = _subscription()
+
+        with patch.object(
+            scoring_watcher.push_service, "send_push", AsyncMock(return_value="sent")
+        ) as send:
+            await _handle_final(
+                db,
+                1,
+                _feed_with_score(),
+                {"codedGameState": coded_state, "detailedState": "Final"},
+                [subscription],
+                "PIT",
+                "CHI",
+            )
+
+        assert send.await_count == 1
+        db.delete.assert_awaited_once_with(subscription)
+
+    @pytest.mark.parametrize(
+        ("coded_state", "detailed"),
+        [("D", "Postponed"), ("C", "Cancelled"), ("Q", "Forfeit")],
+    )
+    async def test_non_result_endings_do_not_notify(self, coded_state, detailed):
+        """Postponed/cancelled games report Final but have no score to push."""
+        db = AsyncMock()
+        subscription = _subscription()
+
+        with patch.object(
+            scoring_watcher.push_service, "send_push", AsyncMock(return_value="sent")
+        ) as send:
+            await _handle_final(
+                db,
+                1,
+                _feed_with_score(0, 0),
+                {"codedGameState": coded_state, "detailedState": detailed},
+                [subscription],
+                "PIT",
+                "CHI",
+            )
+
+        assert send.await_count == 0
+        # Still stop tracking - the game is not coming back.
+        db.delete.assert_awaited_once_with(subscription)
+
+    async def test_failed_send_keeps_subscription_for_retry(self):
+        db = AsyncMock()
+        subscription = _subscription()
+
+        with patch.object(
+            scoring_watcher.push_service, "send_push", AsyncMock(return_value="failed")
+        ):
+            await _handle_final(
+                db,
+                1,
+                _feed_with_score(),
+                {"codedGameState": "F", "detailedState": "Final"},
+                [subscription],
+                "PIT",
+                "CHI",
+            )
+
+        db.delete.assert_not_awaited()
+        assert scoring_watcher._final_attempts[1] == 1
+
+    async def test_gives_up_after_max_attempts(self):
+        db = AsyncMock()
+        subscription = _subscription()
+        scoring_watcher._final_attempts[1] = (
+            scoring_watcher.MAX_FINAL_SEND_ATTEMPTS - 1
+        )
+
+        with patch.object(
+            scoring_watcher.push_service, "send_push", AsyncMock(return_value="failed")
+        ):
+            await _handle_final(
+                db,
+                1,
+                _feed_with_score(),
+                {"codedGameState": "F", "detailedState": "Final"},
+                [subscription],
+                "PIT",
+                "CHI",
+            )
+
+        # Stop retrying so the watcher does not poll a finished game forever.
+        db.delete.assert_awaited_once_with(subscription)
+        assert 1 not in scoring_watcher._final_attempts
+
+    async def test_expired_subscription_is_dropped_not_retried(self):
+        db = AsyncMock()
+        subscription = _subscription()
+
+        with patch.object(
+            scoring_watcher.push_service, "send_push", AsyncMock(return_value="expired")
+        ):
+            await _handle_final(
+                db,
+                1,
+                _feed_with_score(),
+                {"codedGameState": "O", "detailedState": "Game Over"},
+                [subscription],
+                "PIT",
+                "CHI",
+            )
+
+        db.delete.assert_awaited_once_with(subscription)
+        assert 1 not in scoring_watcher._final_attempts
 
 
 class TestIntegrationNotificationFormat:
