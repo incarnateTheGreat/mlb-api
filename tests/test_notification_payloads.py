@@ -13,6 +13,7 @@ from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
 
+from app.routers.notifications import classify_device
 from app.services import push_service
 from app.services import scoring_watcher
 from app.services.scoring_watcher import (
@@ -353,3 +354,53 @@ class TestIntegrationNotificationFormat:
             assert "-" in payload["title"]  # Score separator
             # Check for ordinal suffix (st, nd, rd, or th)
             assert any(suffix in payload["body"] for suffix in ["st", "nd", "rd", "th"])
+
+
+class TestClassifyDevice:
+    """Test device classification from Client Hints and User-Agent."""
+
+    def test_client_hint_mobile(self):
+        """Sec-CH-UA-Mobile: ?1 means mobile, regardless of User-Agent."""
+        desktop_ua = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)"
+        assert classify_device(desktop_ua, "?1") == "mobile"
+
+    def test_client_hint_desktop(self):
+        """Sec-CH-UA-Mobile: ?0 means desktop, regardless of User-Agent."""
+        mobile_ua = "Mozilla/5.0 (Linux; Android 10) AppleWebKit/537.36 Mobile"
+        assert classify_device(mobile_ua, "?0") == "desktop"
+
+    @pytest.mark.parametrize(
+        "user_agent",
+        [
+            "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 "
+            "(KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36",
+            "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) "
+            "AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148",
+            "Mozilla/5.0 (Android 13; Mobile; rv:120.0) Gecko/120.0 Firefox/120.0",
+        ],
+    )
+    def test_mobile_user_agents(self, user_agent):
+        """Recognizes mobile User-Agents when no Client Hint is present."""
+        assert classify_device(user_agent, None) == "mobile"
+
+    @pytest.mark.parametrize(
+        "user_agent",
+        [
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
+            "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+            "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        ],
+    )
+    def test_desktop_user_agents(self, user_agent):
+        """Recognizes desktop User-Agents when no Client Hint is present."""
+        assert classify_device(user_agent, None) == "desktop"
+
+    def test_missing_user_agent_is_unknown(self):
+        """None User-Agent with no Client Hint → None."""
+        assert classify_device(None, None) is None
+        assert classify_device("", None) is None
+
+    def test_malformed_hint_falls_through_to_user_agent(self):
+        """Invalid Client Hint falls back to User-Agent sniffing."""
+        assert classify_device("iPhone", "garbage") == "mobile"

@@ -48,6 +48,12 @@ class PushSubscription(Base):
     # Optional owner, for future per-user management. Not required to send.
     user_email = Column(String(255), nullable=True)
 
+    # --- Diagnostics ---
+    # Recorded at subscribe time to help explain delivery failures later.
+    # Nullable: rows predate this column, and not every request is classifiable.
+    device_type = Column(String(16), nullable=True)  # "mobile" | "desktop"
+    user_agent = Column(Text, nullable=True)
+
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
 
     __table_args__ = (

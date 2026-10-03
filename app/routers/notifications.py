@@ -11,7 +11,7 @@ X-CSRF-Token. apiFetch() in the React Router app does this automatically.
 
 import logging
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -23,6 +23,60 @@ from app.services import push_service
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/notifications", tags=["notifications"])
+
+
+# Sec-CH-UA-Mobile is a structured-field boolean ("?1"/"?0") that Chromium
+# sends on every secure-origin request without opt-in. It's the browser
+# stating its own form factor, so it wins over sniffing the User-Agent.
+# This fallback list covers Safari and Firefox, which do not implement
+# Client Hints.
+_MOBILE_UA_TOKENS = (
+    "android",
+    "iphone",
+    "ipod",
+    "ipad",
+    "mobile",
+    "opera mini",
+    "windows phone",
+    "silk",
+    "kindle",
+)
+
+# A User-Agent is attacker-controlled and unbounded; cap it before storage.
+_MAX_USER_AGENT_LENGTH = 512
+
+
+def classify_device(
+    user_agent: str | None,
+    mobile_hint: str | None = None,
+) -> str | None:
+    """
+    "mobile", "desktop", or None when the request can't be classified.
+
+    `mobile_hint` is the Sec-CH-UA-Mobile header: a structured-field boolean
+    ("?1"/"?0") that Chromium sends on every secure-origin request without the
+    site opting in. It's the browser stating its own form factor, so it wins
+    over sniffing the User-Agent string.
+
+    Known gap: iPadOS 13+ reports a desktop User-Agent and sets the hint to
+    "?0", so an iPad is classified as "desktop" either way.
+    """
+    if mobile_hint == "?1":
+        return "mobile"
+
+    if mobile_hint == "?0":
+        return "desktop"
+
+    if not user_agent:
+        return None
+
+    lowered = user_agent.lower()
+
+    return (
+        "mobile"
+        if any(token in lowered for token in _MOBILE_UA_TOKENS)
+        else "desktop"
+    )
 
 
 class SubscriptionKeys(BaseModel):
@@ -77,6 +131,7 @@ async def get_vapid_public_key() -> dict:
 )
 async def subscribe(
     body: SubscribeRequest,
+    request: Request,
     db: AsyncSession = Depends(get_db),
 ) -> dict:
     """
@@ -94,6 +149,13 @@ async def subscribe(
     endpoint = body.subscription.endpoint
     keys = body.subscription.keys
 
+    raw_user_agent = request.headers.get("user-agent")
+    user_agent = raw_user_agent[:_MAX_USER_AGENT_LENGTH] if raw_user_agent else None
+    device_type = classify_device(
+        raw_user_agent,
+        request.headers.get("sec-ch-ua-mobile"),
+    )
+
     existing = await db.scalar(
         select(PushSubscription).where(
             PushSubscription.endpoint == endpoint,
@@ -106,6 +168,9 @@ async def subscribe(
         existing.p256dh = keys.p256dh
         existing.auth = keys.auth
         existing.last_at_bat_index = body.last_at_bat_index
+        # Backfills rows written before these columns existed.
+        existing.device_type = device_type
+        existing.user_agent = user_agent
     else:
         db.add(
             PushSubscription(
@@ -114,6 +179,8 @@ async def subscribe(
                 auth=keys.auth,
                 game_pk=body.game_pk,
                 last_at_bat_index=body.last_at_bat_index,
+                device_type=device_type,
+                user_agent=user_agent,
             )
         )
 
