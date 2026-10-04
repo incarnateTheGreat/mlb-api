@@ -108,6 +108,21 @@ Make sure you've activated the virtual environment: `source venv/bin/activate`
 | ------ | ------------------ | ------------------------------- |
 | POST   | `/analysis/custom` | Custom AI analysis with context |
 
+### Search
+
+| Method | Endpoint  | Description                           |
+| ------ | --------- | ------------------------------------- |
+| GET    | `/search` | Fuzzy search across players and teams |
+
+Query parameters: `q` (required) and `limit` (default 10).
+
+Unlike every other endpoint, this one does not read from the MLB Stats API —
+that API has no name search, so results come from `player_index` and
+`team_index` in Postgres, matched with `pg_trgm`. Those tables are populated
+by `scripts/sync_player_index.py`, which runs weekly from
+`.github/workflows/sync-player-index.yml`. A freshly deployed database has
+the tables but no rows until that workflow runs at least once.
+
 ## Example: Calling from Remix
 
 ```typescript

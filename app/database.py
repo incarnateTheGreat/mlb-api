@@ -10,6 +10,7 @@ into route handlers via FastAPI's dependency injection.
 from contextlib import asynccontextmanager
 from typing import AsyncGenerator
 
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import (
     AsyncSession,
     async_sessionmaker,
@@ -128,9 +129,13 @@ async def init_db() -> None:
     # on Base.metadata. Importing inside the function avoids a circular import
     # (models import Base from this module).
     from app.models import notifications  # noqa: F401
+    from app.models import search  # noqa: F401
 
     engine = get_engine()
     async with engine.begin() as conn:
+        # Must precede create_all(): the search tables declare GIN indexes
+        # using gin_trgm_ops, which does not exist until pg_trgm is installed.
+        await conn.execute(text("CREATE EXTENSION IF NOT EXISTS pg_trgm"))
         await conn.run_sync(Base.metadata.create_all)
 
 

@@ -25,6 +25,7 @@ from app.routers import (
     matchups,
     analysis,
     notifications,
+    search,
     standings,
     teams,
 )
@@ -105,6 +106,7 @@ app.include_router(matchups.router, prefix="/matchups", tags=["matchups"])
 app.include_router(analysis.router, prefix="/analysis", tags=["analysis"])
 app.include_router(standings.router, prefix="/standings", tags=["standings"])
 app.include_router(teams.router, prefix="/teams", tags=["teams"])
+app.include_router(search.router, prefix="/search", tags=["search"])
 app.include_router(notifications.router)  # Routes are /notifications/*
 
 
