@@ -19,8 +19,10 @@ from app.services import scoring_watcher
 from app.services.scoring_watcher import (
     _build_final_payload,
     _build_payload,
+    _extract_team_ids,
     _handle_final,
     _ordinal,
+    team_logo_url,
 )
 
 
@@ -178,10 +180,112 @@ class TestBuildFinalPayload:
         assert payload["body"] == "HOU 0 – SEA 0"  # Defaults to 0 runs
 
 
+class TestNotificationIcon:
+    """The icon identifies the team at a glance.
+
+    Android renders `icon` as the notification's large icon. iOS and macOS
+    Safari ignore it and fall back to the manifest icon, so every case here
+    must also be safe when the field is simply dropped.
+    """
+
+    def test_extract_team_ids(self):
+        feed = {"gameData": {"teams": {"away": {"id": 134}, "home": {"id": 112}}}}
+
+        assert _extract_team_ids(feed) == (134, 112)
+
+    def test_extract_team_ids_missing(self):
+        assert _extract_team_ids({}) == (None, None)
+
+    def test_team_logo_url_none(self):
+        assert team_logo_url(None) is None
+
+    def test_team_logo_url_shape(self):
+        assert (
+            team_logo_url(134)
+            == "https://midfield.mlbstatic.com/v1/team/134/spots/192"
+        )
+
+    def test_top_inning_uses_away_logo(self):
+        """Away team bats in the top, so the away logo is shown."""
+        play = {
+            "about": {"inning": 5, "isTopInning": True},
+            "result": {"description": "Single", "awayScore": 4, "homeScore": 2},
+            "atBatIndex": 42,
+        }
+        payload = _build_payload(
+            play,
+            game_pk=123,
+            away_abbr="PIT",
+            home_abbr="CHC",
+            away_id=134,
+            home_id=112,
+        )
+
+        assert payload["icon"] == team_logo_url(134)
+
+    def test_bottom_inning_uses_home_logo(self):
+        play = {
+            "about": {"inning": 3, "isTopInning": False},
+            "result": {"description": "Homer", "awayScore": 1, "homeScore": 2},
+            "atBatIndex": 15,
+        }
+        payload = _build_payload(
+            play,
+            game_pk=456,
+            away_abbr="PIT",
+            home_abbr="CHC",
+            away_id=134,
+            home_id=112,
+        )
+
+        assert payload["icon"] == team_logo_url(112)
+
+    def test_icon_omitted_when_team_ids_unknown(self):
+        """No ID in the feed means no icon key at all, not a null."""
+        play = {
+            "about": {"inning": 1, "isTopInning": True},
+            "result": {"description": "Single", "awayScore": 1, "homeScore": 0},
+            "atBatIndex": 1,
+        }
+        payload = _build_payload(play, game_pk=1, away_abbr="LAD", home_abbr="SFG")
+
+        assert "icon" not in payload
+
+    def test_final_uses_away_logo_when_away_wins(self):
+        payload = _build_final_payload(
+            _feed_with_score(away=5, home=3),
+            game_pk=555,
+            away_abbr="ATL",
+            home_abbr="WSH",
+            away_id=144,
+            home_id=120,
+        )
+
+        assert payload["icon"] == team_logo_url(144)
+
+    def test_final_uses_home_logo_when_home_wins(self):
+        payload = _build_final_payload(
+            _feed_with_score(away=2, home=6),
+            game_pk=555,
+            away_abbr="ATL",
+            home_abbr="WSH",
+            away_id=144,
+            home_id=120,
+        )
+
+        assert payload["icon"] == team_logo_url(120)
+
+    def test_final_icon_omitted_when_team_ids_unknown(self):
+        payload = _build_final_payload(
+            _feed_with_score(), game_pk=555, away_abbr="ATL", home_abbr="WSH"
+        )
+
+        assert "icon" not in payload
+
+
 def _subscription(endpoint: str = "https://push.example/abc"):
     """A stand-in for a PushSubscription row."""
     return Mock(endpoint=endpoint, p256dh="p", auth="a", game_pk=1)
-
 
 def _feed_with_score(away: int = 5, home: int = 3) -> dict:
     return {

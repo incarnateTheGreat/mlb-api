@@ -35,6 +35,12 @@ GENUINE_FINAL_CODES = frozenset({"O", "F"})  # "Game Over", "Final"
 # finished game - forever.
 MAX_FINAL_SEND_ATTEMPTS = 6
 
+# Notification icon. Android maps `icon` to the large icon and crops it to a
+# circle; iOS/macOS Safari ignores it entirely and always shows the manifest
+# icon, so this is a progressive enhancement rather than a guarantee.
+_TEAM_LOGO_URL = "https://midfield.mlbstatic.com/v1/team/{team_id}/spots/{size}"
+_LOGO_SIZE = 192
+
 # game_pk -> consecutive ticks on which the final notification failed. Held in
 # memory deliberately: losing it on restart just means a few extra retries.
 _final_attempts: dict[int, int] = {}
@@ -58,11 +64,31 @@ def _extract_team_abbreviations(feed: dict[str, Any]) -> tuple[str, str]:
     return away, home
 
 
+def _extract_team_ids(feed: dict[str, Any]) -> tuple[int | None, int | None]:
+    """Away and home MLB team IDs, or None when the feed omits them."""
+    teams = feed.get("gameData", {}).get("teams", {})
+
+    away = teams.get("away", {}).get("id")
+    home = teams.get("home", {}).get("id")
+
+    return away, home
+
+
+def team_logo_url(team_id: int | None) -> str | None:
+    """Notification icon URL for a team, or None when the ID is unknown."""
+    if team_id is None:
+        return None
+
+    return _TEAM_LOGO_URL.format(team_id=team_id, size=_LOGO_SIZE)
+
+
 def _build_payload(
     play: dict[str, Any],
     game_pk: int,
     away_abbr: str,
     home_abbr: str,
+    away_id: int | None = None,
+    home_id: int | None = None,
 ) -> dict[str, Any]:
     """
     Shape one scoring play into a push payload.
@@ -83,18 +109,28 @@ def _build_payload(
 
     # The batting team is the one that scored.
     scoring_team = away_abbr if is_top else home_abbr
+    scoring_id = away_id if is_top else home_id
 
     # Truncate description if too long
     if len(description) > 120:
         description = description[:117] + "..."
 
-    return {
+    payload = {
         "title": f"{scoring_team} scores! {away_abbr} {away_score} - {home_abbr} {home_score}" if scoring_team else "Scoring play",
         "body": f"{half} {_ordinal(inning)} · {description}",
         "gamePk": game_pk,
         "atBatIndex": play.get("atBatIndex", -1),
         "requireInteraction": True,
     }
+
+    icon = team_logo_url(scoring_id)
+
+    # Omitted rather than sent as null so the service worker's `||` fallback
+    # to the app icon stays simple.
+    if icon:
+        payload["icon"] = icon
+
+    return payload
 
 
 async def _notify_subscriber(
@@ -104,6 +140,8 @@ async def _notify_subscriber(
     scoring_indexes: list[int],
     away_abbr: str,
     home_abbr: str,
+    away_id: int | None = None,
+    home_id: int | None = None,
 ) -> None:
     """Send any scoring plays this subscriber hasn't seen, then move its cursor."""
     pending = [
@@ -121,7 +159,14 @@ async def _notify_subscriber(
         if play is None:
             continue
 
-        payload = _build_payload(play, subscription.game_pk, away_abbr, home_abbr)
+        payload = _build_payload(
+            play,
+            subscription.game_pk,
+            away_abbr,
+            home_abbr,
+            away_id,
+            home_id,
+        )
 
         result = await push_service.send_push(
             endpoint=subscription.endpoint,
@@ -151,6 +196,8 @@ def _build_final_payload(
     game_pk: int,
     away_abbr: str,
     home_abbr: str,
+    away_id: int | None = None,
+    home_id: int | None = None,
 ) -> dict[str, Any]:
     """
     Shape game-final notification.
@@ -161,13 +208,22 @@ def _build_final_payload(
     away_score = linescore.get("away", {}).get("runs", 0)
     home_score = linescore.get("home", {}).get("runs", 0)
 
-    return {
+    payload = {
         "title": "Final",
         "body": f"{away_abbr} {away_score} – {home_abbr} {home_score}",
         "gamePk": game_pk,
         "atBatIndex": -1,
         "requireInteraction": True,
     }
+
+    # The winner's logo. A tie here means a suspended game resumed to an equal
+    # score; home is an arbitrary but harmless choice rather than a branch.
+    icon = team_logo_url(away_id if away_score > home_score else home_id)
+
+    if icon:
+        payload["icon"] = icon
+
+    return payload
 
 
 async def _handle_final(
@@ -178,6 +234,8 @@ async def _handle_final(
     subscriptions: list[PushSubscription],
     away_abbr: str,
     home_abbr: str,
+    away_id: int | None = None,
+    home_id: int | None = None,
 ) -> None:
     """Announce the result if there is one, then stop tracking the game."""
     coded_state = status.get("codedGameState", "")
@@ -201,7 +259,9 @@ async def _handle_final(
 
     attempts = _final_attempts.get(game_pk, 0) + 1
     give_up = attempts >= MAX_FINAL_SEND_ATTEMPTS
-    payload = _build_final_payload(feed, game_pk, away_abbr, home_abbr)
+    payload = _build_final_payload(
+        feed, game_pk, away_abbr, home_abbr, away_id, home_id
+    )
     retry_wanted = False
 
     for subscription in subscriptions:
@@ -283,6 +343,7 @@ async def _process_game(db: AsyncSession, game_pk: int) -> None:
     }
 
     away_abbr, home_abbr = _extract_team_abbreviations(feed)
+    away_id, home_id = _extract_team_ids(feed)
 
     for subscription in subscriptions:
         # A brand new subscription starts at -1, which would otherwise replay
@@ -301,6 +362,8 @@ async def _process_game(db: AsyncSession, game_pk: int) -> None:
             scoring_indexes,
             away_abbr,
             home_abbr,
+            away_id,
+            home_id,
         )
 
     # Once a game ends there is nothing left to announce, so notify and stop
@@ -314,6 +377,8 @@ async def _process_game(db: AsyncSession, game_pk: int) -> None:
             subscriptions,
             away_abbr,
             home_abbr,
+            away_id,
+            home_id,
         )
 
     await db.commit()

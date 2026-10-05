@@ -182,7 +182,8 @@ Phase 3: Delivery (Browser Display)
   "body": "Top 5th · Single to left field",
   "gamePk": 123456,
   "atBatIndex": 42,
-  "requireInteraction": true
+  "requireInteraction": true,
+  "icon": "https://midfield.mlbstatic.com/v1/team/134/spots/192"
 }
 ```
 
@@ -192,6 +193,10 @@ Phase 3: Delivery (Browser Display)
 - **Body:** Inning (Top/Bot + ordinal like "5th") + play description
 - **Description:** Truncated to 120 chars max to avoid OS cutoff mid-word
 - **requireInteraction:** Forces notification to stay until user dismisses it
+- **icon:** Logo of the team that scored. Omitted entirely when the feed has
+  no team IDs, so the service worker falls back to the app icon. Android crops
+  this to a circle; iOS and macOS Safari ignore it and always show the manifest
+  icon.
 
 ### Final Game Notification
 
@@ -205,9 +210,14 @@ Phase 3: Delivery (Browser Display)
   "body": "PIT 5 – CHI 3",
   "gamePk": 123456,
   "atBatIndex": -1,
-  "requireInteraction": true
+  "requireInteraction": true,
+  "icon": "https://midfield.mlbstatic.com/v1/team/134/spots/192"
 }
 ```
+
+**Breakdown:**
+
+- **icon:** Logo of the winning team.
 
 ---
 

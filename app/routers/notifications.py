@@ -19,6 +19,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.database import get_db
 from app.models.notifications import PushSubscription
 from app.services import push_service
+from app.services.scoring_watcher import team_logo_url
 
 logger = logging.getLogger(__name__)
 
@@ -44,6 +45,9 @@ _MOBILE_UA_TOKENS = (
 
 # A User-Agent is attacker-controlled and unbounded; cap it before storage.
 _MAX_USER_AGENT_LENGTH = 512
+
+# Stand-in team for the test notification's icon (Pittsburgh Pirates).
+_TEST_ICON_TEAM_ID = 134
 
 
 def classify_device(
@@ -243,6 +247,10 @@ async def send_test_notification(
             "title": "Test notification",
             "body": "Scoring play alerts are working.",
             "gamePk": body.game_pk,
+            # A fixed team logo: this endpoint exists to prove the delivery
+            # path works, and the icon is part of that path. Which team it is
+            # does not matter, only that it arrives instead of the app icon.
+            "icon": team_logo_url(_TEST_ICON_TEAM_ID),
         },
     )
 
