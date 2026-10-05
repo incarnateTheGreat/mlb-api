@@ -10,6 +10,7 @@ X-CSRF-Token. apiFetch() in the React Router app does this automatically.
 """
 
 import logging
+from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
@@ -251,6 +252,10 @@ async def send_test_notification(
             # path works, and the icon is part of that path. Which team it is
             # does not matter, only that it arrives instead of the app icon.
             "icon": team_logo_url(_TEST_ICON_TEAM_ID),
+            # Unique per send. Without it the service worker derives a tag
+            # from gamePk alone, and a repeat test would silently replace the
+            # previous notification rather than alerting again.
+            "tag": f"test-{uuid4()}",
         },
     )
 
