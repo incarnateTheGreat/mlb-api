@@ -22,8 +22,8 @@ from app.services.scoring_watcher import (
     _extract_team_ids,
     _handle_final,
     _ordinal,
-    team_logo_url,
 )
+from app.services.team_icons import matchup_icon_url, team_logo_url
 
 
 class TestPushUrgency:
@@ -205,8 +205,29 @@ class TestNotificationIcon:
             == "https://midfield.mlbstatic.com/v1/team/134/spots/192"
         )
 
-    def test_top_inning_uses_away_logo(self):
-        """Away team bats in the top, so the away logo is shown."""
+    def test_matchup_icon_url_shape(self):
+        """Back team first, front team second - the front one is drawn on top."""
+        assert (
+            matchup_icon_url(134, 112)
+            == "/api/notifications/matchup-icon/134/112.png"
+        )
+
+    def test_matchup_icon_url_is_relative(self):
+        """The service worker resolves this against the frontend origin, where
+        `/api/*` proxies to this API. An absolute URL would need the API's
+        public hostname as another environment variable."""
+        assert matchup_icon_url(134, 112).startswith("/api/")
+
+    def test_matchup_icon_url_falls_back_to_single_logo(self):
+        """One known ID still beats no icon at all."""
+        assert matchup_icon_url(None, 112) == team_logo_url(112)
+        assert matchup_icon_url(134, None) == team_logo_url(134)
+
+    def test_matchup_icon_url_none_when_both_unknown(self):
+        assert matchup_icon_url(None, None) is None
+
+    def test_top_inning_puts_away_logo_in_front(self):
+        """Away team bats in the top, so the away logo leads the pair."""
         play = {
             "about": {"inning": 5, "isTopInning": True},
             "result": {"description": "Single", "awayScore": 4, "homeScore": 2},
@@ -221,9 +242,9 @@ class TestNotificationIcon:
             home_id=112,
         )
 
-        assert payload["icon"] == team_logo_url(134)
+        assert payload["icon"] == matchup_icon_url(112, 134)
 
-    def test_bottom_inning_uses_home_logo(self):
+    def test_bottom_inning_puts_home_logo_in_front(self):
         play = {
             "about": {"inning": 3, "isTopInning": False},
             "result": {"description": "Homer", "awayScore": 1, "homeScore": 2},
@@ -238,7 +259,7 @@ class TestNotificationIcon:
             home_id=112,
         )
 
-        assert payload["icon"] == team_logo_url(112)
+        assert payload["icon"] == matchup_icon_url(134, 112)
 
     def test_icon_omitted_when_team_ids_unknown(self):
         """No ID in the feed means no icon key at all, not a null."""
@@ -251,7 +272,24 @@ class TestNotificationIcon:
 
         assert "icon" not in payload
 
-    def test_final_uses_away_logo_when_away_wins(self):
+    def test_icon_falls_back_to_single_logo_with_one_id(self):
+        """A half-populated feed still gets the scoring team's logo."""
+        play = {
+            "about": {"inning": 1, "isTopInning": True},
+            "result": {"description": "Single", "awayScore": 1, "homeScore": 0},
+            "atBatIndex": 1,
+        }
+        payload = _build_payload(
+            play,
+            game_pk=1,
+            away_abbr="LAD",
+            home_abbr="SFG",
+            away_id=119,
+        )
+
+        assert payload["icon"] == team_logo_url(119)
+
+    def test_final_puts_winner_in_front_when_away_wins(self):
         payload = _build_final_payload(
             _feed_with_score(away=5, home=3),
             game_pk=555,
@@ -261,9 +299,9 @@ class TestNotificationIcon:
             home_id=120,
         )
 
-        assert payload["icon"] == team_logo_url(144)
+        assert payload["icon"] == matchup_icon_url(120, 144)
 
-    def test_final_uses_home_logo_when_home_wins(self):
+    def test_final_puts_winner_in_front_when_home_wins(self):
         payload = _build_final_payload(
             _feed_with_score(away=2, home=6),
             game_pk=555,
@@ -273,7 +311,7 @@ class TestNotificationIcon:
             home_id=120,
         )
 
-        assert payload["icon"] == team_logo_url(120)
+        assert payload["icon"] == matchup_icon_url(144, 120)
 
     def test_final_icon_omitted_when_team_ids_unknown(self):
         payload = _build_final_payload(

@@ -183,7 +183,7 @@ Phase 3: Delivery (Browser Display)
   "gamePk": 123456,
   "atBatIndex": 42,
   "requireInteraction": true,
-  "icon": "https://midfield.mlbstatic.com/v1/team/134/spots/192"
+  "icon": "/api/notifications/matchup-icon/112/134.png"
 }
 ```
 
@@ -193,9 +193,18 @@ Phase 3: Delivery (Browser Display)
 - **Body:** Inning (Top/Bot + ordinal like "5th") + play description
 - **Description:** Truncated to 120 chars max to avoid OS cutoff mid-word
 - **requireInteraction:** Forces notification to stay until user dismisses it
-- **icon:** Logo of the team that scored. Omitted entirely when the feed has
-  no team IDs, so the service worker falls back to the app icon. Android crops
-  this to a circle; iOS and macOS Safari ignore it and always show the manifest
+- **icon:** Both teams' logos staggered into one image, with the team that
+  scored drawn in front. Path order is `{back}/{front}`, so `112/134` means
+  the Pirates (134) scored against the Cubs (112).
+
+  The URL is **relative on purpose**: the service worker resolves it against
+  the frontend origin, where `/api/*` proxies through to this API. An absolute
+  URL would mean teaching the API its own public hostname.
+
+  Degrades in two steps — to a single team logo on the MLB CDN when the feed
+  only has one team ID, then omitted entirely when it has neither, at which
+  point the service worker falls back to the app icon. Android crops the icon
+  to a circle; iOS and macOS Safari ignore it and always show the manifest
   icon.
 
 ### Final Game Notification
@@ -211,13 +220,41 @@ Phase 3: Delivery (Browser Display)
   "gamePk": 123456,
   "atBatIndex": -1,
   "requireInteraction": true,
-  "icon": "https://midfield.mlbstatic.com/v1/team/134/spots/192"
+  "icon": "/api/notifications/matchup-icon/112/134.png"
 }
 ```
 
 **Breakdown:**
 
-- **icon:** Logo of the winning team.
+- **icon:** Same staggered pair, with the **winning** team drawn in front.
+
+---
+
+## Matchup Icon
+
+**[GET /notifications/matchup-icon/{back_team_id}/{front_team_id}.png](app/routers/notifications.py)**
+
+A notification carries a single `icon` URL, so there is no way to layer two
+logos client side — the pairing has to happen on the server. This endpoint
+fetches both teams' logos from MLB's CDN and composes them into one 192x192
+transparent PNG.
+
+The browser fetches it while rendering the notification, which can be long
+after the page was closed, so it must stay publicly reachable (no auth).
+
+**Layout constraints** — see [app/services/team_icons.py](app/services/team_icons.py):
+
+- Android masks the icon to the **inscribed circle**, not the square. Both
+  logos are offset along the diagonal so their artwork stays inside a 96px
+  radius; a test pins this invariant so nobody can enlarge them back out of it.
+- The front logo gets a white outline traced from its own alpha channel. The
+  two overlap by roughly a third, and without it a dark logo over a dark logo
+  reads as a single shape.
+- Results are cached per `(back, front)` pair for a day. Order is part of the
+  key, since swapping which team is in front is a different image. Failures
+  are **not** cached, so a CDN blip doesn't poison a matchup.
+- Composition runs in a worker thread — Pillow is CPU-bound and this event
+  loop also drives the scoring watcher's polling.
 
 ---
 
@@ -234,9 +271,17 @@ Phase 3: Delivery (Browser Display)
 - `_process_game()` — Main logic: fetch feed, compare plays, send notifs
 - `run_scoring_watcher()` — Infinite polling loop (runs at startup)
 
+**[app/services/team_icons.py](app/services/team_icons.py)**
+
+- `team_logo_url()` — Single team's logo on MLB's CDN
+- `matchup_icon_url()` — Relative URL for the composite, degrading to a single
+  logo and then to None as team IDs go missing
+- `render_matchup_icon()` — Fetches both logos and composes them, cached
+
 **[app/routers/notifications.py](app/routers/notifications.py)**
 
 - `GET /notifications/vapid-public-key` — Browser fetches this to create subscriptions
+- `GET /notifications/matchup-icon/{back}/{front}.png` — Composite team logos
 - `POST /notifications/subscribe` — Frontend sends push subscription to backend
 - `POST /notifications/unsubscribe` — Frontend removes subscription
 

@@ -22,6 +22,7 @@ from app.database import get_session_maker
 from app.models.notifications import PushSubscription
 from app.services import push_service
 from app.services.mlb_client import get_mlb_client
+from app.services.team_icons import matchup_icon_url
 
 logger = logging.getLogger(__name__)
 
@@ -34,12 +35,6 @@ GENUINE_FINAL_CODES = frozenset({"O", "F"})  # "Game Over", "Final"
 # failing endpoint would hold its row - and so keep the watcher polling a
 # finished game - forever.
 MAX_FINAL_SEND_ATTEMPTS = 6
-
-# Notification icon. Android maps `icon` to the large icon and crops it to a
-# circle; iOS/macOS Safari ignores it entirely and always shows the manifest
-# icon, so this is a progressive enhancement rather than a guarantee.
-_TEAM_LOGO_URL = "https://midfield.mlbstatic.com/v1/team/{team_id}/spots/{size}"
-_LOGO_SIZE = 192
 
 # game_pk -> consecutive ticks on which the final notification failed. Held in
 # memory deliberately: losing it on restart just means a few extra retries.
@@ -74,14 +69,6 @@ def _extract_team_ids(feed: dict[str, Any]) -> tuple[int | None, int | None]:
     return away, home
 
 
-def team_logo_url(team_id: int | None) -> str | None:
-    """Notification icon URL for a team, or None when the ID is unknown."""
-    if team_id is None:
-        return None
-
-    return _TEAM_LOGO_URL.format(team_id=team_id, size=_LOGO_SIZE)
-
-
 def _build_payload(
     play: dict[str, Any],
     game_pk: int,
@@ -110,6 +97,7 @@ def _build_payload(
     # The batting team is the one that scored.
     scoring_team = away_abbr if is_top else home_abbr
     scoring_id = away_id if is_top else home_id
+    fielding_id = home_id if is_top else away_id
 
     # Truncate description if too long
     if len(description) > 120:
@@ -123,7 +111,7 @@ def _build_payload(
         "requireInteraction": True,
     }
 
-    icon = team_logo_url(scoring_id)
+    icon = matchup_icon_url(fielding_id, scoring_id)
 
     # Omitted rather than sent as null so the service worker's `||` fallback
     # to the app icon stays simple.
@@ -216,9 +204,14 @@ def _build_final_payload(
         "requireInteraction": True,
     }
 
-    # The winner's logo. A tie here means a suspended game resumed to an equal
-    # score; home is an arbitrary but harmless choice rather than a branch.
-    icon = team_logo_url(away_id if away_score > home_score else home_id)
+    # The winner's logo in front. A tie here means a suspended game resumed to
+    # an equal score; home is an arbitrary but harmless choice rather than a
+    # branch.
+    away_won = away_score > home_score
+    icon = matchup_icon_url(
+        home_id if away_won else away_id,
+        away_id if away_won else home_id,
+    )
 
     if icon:
         payload["icon"] = icon
