@@ -8,6 +8,20 @@ from datetime import date
 from typing import Any, Optional
 
 
+# Event type mappings for playoff/special games
+EVENT_TYPE_MAP = {
+    "world series": "WS",
+    "alcs": "ALCS",
+    "alds": "ALDS",
+    "nlcs": "NLCS",
+    "nlds": "NLDS",
+    "spring training": "S",
+    "regular season": "R",
+    "all-star": "A",
+    "playoffs": ["ALCS", "ALDS", "NLCS", "NLDS", "WS"],
+}
+
+
 class ScheduleMixin:
     """Mixin providing schedule-related API methods."""
     
@@ -84,3 +98,64 @@ class ScheduleMixin:
             params["fields"] = fields
         
         return await self._get("/schedule", params=params)
+    
+    async def get_historical_games(
+        self,
+        event_type: str,
+        season: int,
+        game_number: Optional[int] = None,
+    ) -> list[dict[str, Any]]:
+        """
+        Fetch historical games by event type and season.
+        
+        Args:
+            event_type: "world series", "alcs", "alds", "nlcs", "nlds", "regular season", etc.
+            season: Year (e.g., 1993, 2024)
+            game_number: Specific game number in series (1-7 for playoffs, optional)
+        
+        Returns:
+            List of games matching the criteria, sorted by date
+            Each game has: gamePk, gameDate, teams, score, status, series info
+        """
+        event_type_lower = event_type.lower()
+        event_codes = EVENT_TYPE_MAP.get(event_type_lower, event_type_lower.upper())
+        
+        # Handle "playoffs" -> multiple event codes
+        if isinstance(event_codes, list):
+            event_codes_str = ",".join(event_codes)
+        else:
+            event_codes_str = event_codes
+        
+        params = {
+            "sportId": 1,  # MLB only
+            "startDate": f"{season}-01-01",
+            "endDate": f"{season}-12-31",
+            "eventTypes": event_codes_str,
+            "language": "en",
+            "sortBy": "gameDate",
+        }
+        
+        schedule_data = await self._get("/schedule", params=params)
+        
+        # Flatten games from all dates into a single list
+        all_games = []
+        for date_obj in schedule_data.get("dates", []):
+            for game in date_obj.get("games", []):
+                game_info = {
+                    "game_pk": game.get("gamePk"),
+                    "game_date": game.get("gameDate"),
+                    "game_type": game.get("gameType"),
+                    "status": game.get("status", {}).get("detailedState", ""),
+                    "home_team": game.get("teams", {}).get("home", {}).get("team", {}).get("name", ""),
+                    "away_team": game.get("teams", {}).get("away", {}).get("team", {}).get("name", ""),
+                    "home_score": game.get("teams", {}).get("home", {}).get("score"),
+                    "away_score": game.get("teams", {}).get("away", {}).get("score"),
+                    "description": f"{game.get('teams', {}).get('away', {}).get('team', {}).get('name', '')} @ {game.get('teams', {}).get('home', {}).get('team', {}).get('name', '')}",
+                }
+                all_games.append(game_info)
+        
+        # Filter by game number if specified
+        if game_number and 1 <= game_number <= len(all_games):
+            return [all_games[game_number - 1]]
+        
+        return all_games

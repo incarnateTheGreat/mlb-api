@@ -1,0 +1,10 @@
+{
+  "sources_processed": 3,
+  "sources_ingested": 3,
+  "sources_failed": 0,
+  "failed_sources": [],
+  "total_chunks": 3,
+  "total_tokens_approx": 324,
+  "ingestion_duration_ms": 3,
+  "timestamp": "2026-09-15T04:48:58.128876"
+}

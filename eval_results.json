@@ -1,0 +1,333 @@
+{
+  "summary": {
+    "total_cases": 15,
+    "passed": 15,
+    "pass_rate": 1.0,
+    "avg_score": 1.0,
+    "avg_latency_ms": 92.53333333333333
+  },
+  "by_mode": {
+    "tool": {
+      "count": 5,
+      "passed": 5,
+      "pass_rate": 1.0,
+      "avg_score": 1.0,
+      "avg_latency_ms": 110.4
+    },
+    "rag": {
+      "count": 5,
+      "passed": 5,
+      "pass_rate": 1.0,
+      "avg_score": 1.0,
+      "avg_latency_ms": 84.4
+    },
+    "hybrid": {
+      "count": 5,
+      "passed": 5,
+      "pass_rate": 1.0,
+      "avg_score": 1.0,
+      "avg_latency_ms": 82.8
+    }
+  },
+  "cases": [
+    {
+      "case_id": "tool_001",
+      "case_description": "Tool: Player stats with full context",
+      "passed": true,
+      "mode": "tool",
+      "query": "What are the stats for player 545361 in 2024?",
+      "answer_length": 65,
+      "confidence": "high",
+      "latency_ms": 187,
+      "citation_count": 1,
+      "citation_types": [
+        "tool"
+      ],
+      "citations_correct": true,
+      "answer_quality": true,
+      "has_warnings": true,
+      "expected_warnings": true,
+      "failures": [],
+      "score": 1.0
+    },
+    {
+      "case_id": "tool_002",
+      "case_description": "Tool: Game summary",
+      "passed": true,
+      "mode": "tool",
+      "query": "What's the status of game 777428?",
+      "answer_length": 55,
+      "confidence": "high",
+      "latency_ms": 365,
+      "citation_count": 1,
+      "citation_types": [
+        "tool"
+      ],
+      "citations_correct": true,
+      "answer_quality": true,
+      "has_warnings": true,
+      "expected_warnings": true,
+      "failures": [],
+      "score": 1.0
+    },
+    {
+      "case_id": "tool_003",
+      "case_description": "Tool: Explicit split type",
+      "passed": true,
+      "mode": "tool",
+      "query": "Player 545361 hitting stats in 2024",
+      "answer_length": 65,
+      "confidence": "high",
+      "latency_ms": 0,
+      "citation_count": 1,
+      "citation_types": [
+        "tool"
+      ],
+      "citations_correct": true,
+      "answer_quality": true,
+      "has_warnings": true,
+      "expected_warnings": true,
+      "failures": [],
+      "score": 1.0
+    },
+    {
+      "case_id": "tool_004",
+      "case_description": "Tool: No context should warn",
+      "passed": true,
+      "mode": "tool",
+      "query": "Tell me something without context",
+      "answer_length": 122,
+      "confidence": "low",
+      "latency_ms": 0,
+      "citation_count": 0,
+      "citation_types": [],
+      "citations_correct": true,
+      "answer_quality": true,
+      "has_warnings": true,
+      "expected_warnings": true,
+      "failures": [],
+      "score": 1.0
+    },
+    {
+      "case_id": "tool_005",
+      "case_description": "Tool: Generic stats request",
+      "passed": true,
+      "mode": "tool",
+      "query": "Get player stats",
+      "answer_length": 65,
+      "confidence": "high",
+      "latency_ms": 0,
+      "citation_count": 1,
+      "citation_types": [
+        "tool"
+      ],
+      "citations_correct": true,
+      "answer_quality": true,
+      "has_warnings": true,
+      "expected_warnings": true,
+      "failures": [],
+      "score": 1.0
+    },
+    {
+      "case_id": "rag_001",
+      "case_description": "RAG: Infield fly rule",
+      "passed": true,
+      "mode": "rag",
+      "query": "What is the infield fly rule?",
+      "answer_length": 128,
+      "confidence": "high",
+      "latency_ms": 84,
+      "citation_count": 3,
+      "citation_types": [
+        "document"
+      ],
+      "citations_correct": true,
+      "answer_quality": true,
+      "has_warnings": true,
+      "expected_warnings": true,
+      "failures": [],
+      "score": 1.0
+    },
+    {
+      "case_id": "rag_002",
+      "case_description": "RAG: Designated hitter rule",
+      "passed": true,
+      "mode": "rag",
+      "query": "Explain the designated hitter rule",
+      "answer_length": 133,
+      "confidence": "high",
+      "latency_ms": 85,
+      "citation_count": 3,
+      "citation_types": [
+        "document"
+      ],
+      "citations_correct": true,
+      "answer_quality": true,
+      "has_warnings": true,
+      "expected_warnings": true,
+      "failures": [],
+      "score": 1.0
+    },
+    {
+      "case_id": "rag_003",
+      "case_description": "RAG: World Series history",
+      "passed": true,
+      "mode": "rag",
+      "query": "Tell me about World Series history",
+      "answer_length": 124,
+      "confidence": "high",
+      "latency_ms": 85,
+      "citation_count": 1,
+      "citation_types": [
+        "document"
+      ],
+      "citations_correct": true,
+      "answer_quality": true,
+      "has_warnings": true,
+      "expected_warnings": true,
+      "failures": [],
+      "score": 1.0
+    },
+    {
+      "case_id": "rag_004",
+      "case_description": "RAG: Infield fly conditions",
+      "passed": true,
+      "mode": "rag",
+      "query": "When does the infield fly rule apply?",
+      "answer_length": 136,
+      "confidence": "high",
+      "latency_ms": 84,
+      "citation_count": 3,
+      "citation_types": [
+        "document"
+      ],
+      "citations_correct": true,
+      "answer_quality": true,
+      "has_warnings": true,
+      "expected_warnings": true,
+      "failures": [],
+      "score": 1.0
+    },
+    {
+      "case_id": "rag_005",
+      "case_description": "RAG: DH rule edge case",
+      "passed": true,
+      "mode": "rag",
+      "query": "What happens if a DH moves to defense?",
+      "answer_length": 119,
+      "confidence": "high",
+      "latency_ms": 84,
+      "citation_count": 1,
+      "citation_types": [
+        "document"
+      ],
+      "citations_correct": true,
+      "answer_quality": true,
+      "has_warnings": true,
+      "expected_warnings": true,
+      "failures": [],
+      "score": 1.0
+    },
+    {
+      "case_id": "hybrid_001",
+      "case_description": "Hybrid: Game + synthesis",
+      "passed": true,
+      "mode": "hybrid",
+      "query": "Summarize game 777428 and add context",
+      "answer_length": 201,
+      "confidence": "medium",
+      "latency_ms": 85,
+      "citation_count": 1,
+      "citation_types": [
+        "tool"
+      ],
+      "citations_correct": true,
+      "answer_quality": true,
+      "has_warnings": true,
+      "expected_warnings": true,
+      "failures": [],
+      "score": 1.0
+    },
+    {
+      "case_id": "hybrid_002",
+      "case_description": "Hybrid: Player stats + history",
+      "passed": true,
+      "mode": "hybrid",
+      "query": "Mike Trout stats for 2024 and historical context",
+      "answer_length": 233,
+      "confidence": "high",
+      "latency_ms": 80,
+      "citation_count": 2,
+      "citation_types": [
+        "tool",
+        "document"
+      ],
+      "citations_correct": true,
+      "answer_quality": true,
+      "has_warnings": true,
+      "expected_warnings": true,
+      "failures": [],
+      "score": 1.0
+    },
+    {
+      "case_id": "hybrid_003",
+      "case_description": "Hybrid: Rule + data (no tool match)",
+      "passed": true,
+      "mode": "hybrid",
+      "query": "Infield fly rule and recent games",
+      "answer_length": 260,
+      "confidence": "medium",
+      "latency_ms": 82,
+      "citation_count": 1,
+      "citation_types": [
+        "document"
+      ],
+      "citations_correct": true,
+      "answer_quality": true,
+      "has_warnings": true,
+      "expected_warnings": true,
+      "failures": [],
+      "score": 1.0
+    },
+    {
+      "case_id": "hybrid_004",
+      "case_description": "Hybrid: Rule + live query",
+      "passed": true,
+      "mode": "hybrid",
+      "query": "Designated hitter and current game",
+      "answer_length": 267,
+      "confidence": "medium",
+      "latency_ms": 85,
+      "citation_count": 1,
+      "citation_types": [
+        "document"
+      ],
+      "citations_correct": true,
+      "answer_quality": true,
+      "has_warnings": true,
+      "expected_warnings": true,
+      "failures": [],
+      "score": 1.0
+    },
+    {
+      "case_id": "hybrid_005",
+      "case_description": "Hybrid: Game + rule context",
+      "passed": true,
+      "mode": "hybrid",
+      "query": "Game 777428 with baseball context",
+      "answer_length": 197,
+      "confidence": "medium",
+      "latency_ms": 82,
+      "citation_count": 1,
+      "citation_types": [
+        "tool"
+      ],
+      "citations_correct": true,
+      "answer_quality": true,
+      "has_warnings": true,
+      "expected_warnings": true,
+      "failures": [],
+      "score": 1.0
+    }
+  ]
+}
