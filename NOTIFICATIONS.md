@@ -236,7 +236,7 @@ Phase 3: Delivery (Browser Display)
 
 A notification carries a single `icon` URL, so there is no way to layer two
 logos client side — the pairing has to happen on the server. This endpoint
-fetches both teams' logos from MLB's CDN and composes them into one 192x192
+fetches both teams' logos from MLB's CDN and composes them into one 256x256
 transparent PNG.
 
 The browser fetches it while rendering the notification, which can be long
@@ -244,9 +244,18 @@ after the page was closed, so it must stay publicly reachable (no auth).
 
 **Layout constraints** — see [app/services/team_icons.py](app/services/team_icons.py):
 
-- Android masks the icon to the **inscribed circle**, not the square. Both
-  logos are offset along the diagonal so their artwork stays inside a 96px
-  radius; a test pins this invariant so nobody can enlarge them back out of it.
+- Android masks the icon to the **inscribed circle**, not the square, and
+  MLB's artwork is full bleed with no transparent margin to reclaim. So the
+  only lever on logo size is **how much the two overlap** — `_LOGO_OVERLAP` in
+  [app/services/team_icons.py](app/services/team_icons.py). The box size is
+  derived from it rather than set alongside it, so the two can't be put in an
+  inconsistent pair that quietly clips.
+- Raising the overlap buys larger logos but hides more of the back team. Two
+  tests bracket it: one fails if artwork escapes the circle, the other if the
+  back logo drops below 30% visible. At the current 45% overlap each logo is
+  61% of the canvas and 58% of the back one still shows.
+- The canvas is 256 because Android draws the large icon around that size on
+  an xxxhdpi screen; a 192 canvas gets upscaled and goes soft.
 - The front logo gets a white outline traced from its own alpha channel. The
   two overlap by roughly a third, and without it a dark logo over a dark logo
   reads as a single shape.

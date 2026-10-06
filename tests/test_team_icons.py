@@ -8,6 +8,7 @@ without needing a device.
 """
 
 from io import BytesIO
+from math import sqrt
 from unittest.mock import AsyncMock, patch
 
 import httpx
@@ -29,8 +30,9 @@ def _logo_png(colour: tuple[int, int, int, int], size: int = 192) -> bytes:
     """
     A stand-in for real logo artwork: a filled circle inscribed in the box.
 
-    MLB's "spots" logos are roundels, so a circle - not a full-bleed square -
-    is the shape the layout is designed around.
+    MLB's "spots" logos are full-bleed roundels - verified to have no
+    transparent margin - so a circle touching every edge is the worst case the
+    layout has to survive.
     """
     image = Image.new("RGBA", (size, size), (0, 0, 0, 0))
     ImageDraw.Draw(image).ellipse((0, 0, size - 1, size - 1), fill=colour)
@@ -41,6 +43,14 @@ def _logo_png(colour: tuple[int, int, int, int], size: int = 192) -> bytes:
     return buffer.getvalue()
 
 
+def _opaque_pixels(png: bytes) -> int:
+    """How many pixels of a PNG carry artwork."""
+    alpha = Image.open(BytesIO(png)).convert("RGBA").getchannel("A")
+
+    # getcolors() yields (count, value), not (value, count).
+    return sum(count for count, value in alpha.getcolors() if value > 16)
+
+
 @pytest.fixture(autouse=True)
 def _clear_cache():
     team_icons._icon_cache.clear()
@@ -49,19 +59,19 @@ def _clear_cache():
 
 
 class TestCompose:
-    def test_output_is_a_192px_rgba_png(self):
+    def test_output_matches_the_configured_canvas(self):
         image = Image.open(BytesIO(_compose(_logo_png(RED), _logo_png(BLUE))))
 
-        assert image.size == (192, 192)
+        assert image.size == (team_icons._CANVAS_SIZE, team_icons._CANVAS_SIZE)
         assert image.mode == "RGBA"
 
     def test_artwork_survives_androids_circular_crop(self):
         """
         Nothing may fall outside the inscribed circle.
 
-        This is the constraint that forced the diagonal offset. If someone
-        enlarges the logos or pushes them further apart, this fails before a
-        phone ever shows a clipped logo.
+        This is the constraint that bounds how large the logos can be. If
+        someone raises the overlap knob too far, this fails here rather than
+        on a phone showing a clipped logo.
         """
         image = Image.open(BytesIO(_compose(_logo_png(RED), _logo_png(BLUE))))
         alpha = image.getchannel("A")
@@ -82,21 +92,65 @@ class TestCompose:
     def test_front_logo_is_drawn_over_the_back_one(self):
         """Where they overlap, the front team wins - that is what marks it."""
         image = Image.open(BytesIO(_compose(_logo_png(RED), _logo_png(BLUE))))
+        centre = team_icons._CANVAS_SIZE // 2
 
-        assert image.getpixel((96, 96)) == BLUE
+        assert image.getpixel((centre, centre)) == BLUE
 
-    def test_both_logos_remain_visible(self):
-        """A stagger that hides either team is just a single logo."""
+    def test_back_logo_stays_recognisable(self):
+        """
+        The whole point of a pair is that both teams read.
+
+        Overlap is the knob that buys logo size, so this is the guard on the
+        other side of that trade: push it too far and the back team becomes a
+        sliver, which is just a single logo with extra steps.
+        """
         image = Image.open(BytesIO(_compose(_logo_png(RED), _logo_png(BLUE))))
 
-        assert image.getpixel((40, 66)) == RED
-        assert image.getpixel((152, 126)) == BLUE
+        colours = dict(
+            (colour, count)
+            for count, colour in image.getcolors(maxcolors=1 << 16) or []
+        )
+
+        visible_back = colours.get(RED, 0)
+        whole_logo = _opaque_pixels(_logo_png(RED, team_icons._LOGO_BOX))
+
+        assert visible_back / whole_logo > 0.3
 
     def test_background_stays_transparent(self):
         """The canvas corners must not become an opaque box."""
         image = Image.open(BytesIO(_compose(_logo_png(RED), _logo_png(BLUE))))
 
         assert image.getpixel((0, 0))[3] == 0
+
+
+class TestGeometry:
+    """
+    The layout is derived rather than hard-coded, so these cover the maths
+    that replaced the constants.
+    """
+
+    def test_logos_actually_overlap_by_the_configured_amount(self):
+        box, offset = team_icons._fit_to_circle(team_icons._LOGO_OVERLAP)
+        separation = 2 * offset * sqrt(2)
+
+        assert (box - separation) / box == pytest.approx(
+            team_icons._LOGO_OVERLAP, abs=0.02
+        )
+
+    @pytest.mark.parametrize("overlap", [0.1, 0.25, 0.45, 0.6, 0.75])
+    def test_any_overlap_setting_still_fits_the_circle(self, overlap):
+        """Re-tuning the knob cannot silently produce a clipped icon."""
+        box, offset = team_icons._fit_to_circle(overlap)
+        reach = offset * sqrt(2) + box / 2 + team_icons._HALO_WIDTH
+
+        assert reach <= team_icons._CANVAS_SIZE / 2
+
+    def test_more_overlap_buys_a_larger_logo(self):
+        """The trade the knob exists to make."""
+        tight, _ = team_icons._fit_to_circle(0.2)
+        loose, _ = team_icons._fit_to_circle(0.5)
+
+        assert loose > tight
 
 
 class TestRenderMatchupIcon:
@@ -107,7 +161,10 @@ class TestRenderMatchupIcon:
             icon = await render_matchup_icon(134, 112)
 
         assert icon is not None
-        assert Image.open(BytesIO(icon)).size == (192, 192)
+        assert Image.open(BytesIO(icon)).size == (
+            team_icons._CANVAS_SIZE,
+            team_icons._CANVAS_SIZE,
+        )
 
     async def test_result_is_cached_per_pair(self):
         """Composing is CPU work; a matchup should pay for it once."""
@@ -164,7 +221,10 @@ class TestMatchupIconRoute:
 
         assert response.status_code == 200
         assert response.headers["content-type"] == "image/png"
-        assert Image.open(BytesIO(response.content)).size == (192, 192)
+        assert Image.open(BytesIO(response.content)).size == (
+            team_icons._CANVAS_SIZE,
+            team_icons._CANVAS_SIZE,
+        )
 
     def test_is_cacheable_by_the_browser(self):
         """The icon is refetched on every notification otherwise."""

@@ -13,6 +13,7 @@ everything here is a progressive enhancement rather than a guarantee.
 import asyncio
 import logging
 from io import BytesIO
+from math import sqrt
 
 import httpx
 from cachetools import TTLCache
@@ -31,27 +32,55 @@ _LOGO_SIZE = 192
 # forget to set on Railway.
 _MATCHUP_ICON_PATH = "/api/notifications/matchup-icon"
 
-# Composite geometry. Android masks the icon to the inscribed circle, so both
-# logos have to stay inside that circle rather than the full square. Each logo
-# sits _DIAGONAL_OFFSET px along the diagonal from centre, which reads as a
-# stagger while keeping its artwork within the safe radius. The budget, for a
-# worst-case logo that fills its box edge to edge:
-#   offset from centre (30 * sqrt 2 = 42.4)
-#   + half a logo (48)
-#   + the halo below (3)
-#   = 93.4, inside the 96px radius with room for antialiasing.
-_CANVAS_SIZE = 192
-_LOGO_BOX = 96
-_DIAGONAL_OFFSET = 30
+# Composite geometry.
+#
+# Android masks the icon to the INSCRIBED CIRCLE, not the square, so the usable
+# area is the circle. MLB's "spots" art is full bleed - it fills its frame edge
+# to edge with no transparent margin - so there is no padding to reclaim. That
+# leaves exactly one lever on how large the logos can be: how much they overlap.
+#
+# 256 rather than 192 because Android renders the large icon around 256px on an
+# xxxhdpi screen, where a 192px canvas is upscaled and goes soft.
+_CANVAS_SIZE = 256
 
-# White outline around the front logo. The two logos overlap by roughly a
-# third of their width, and without a separating edge a dark logo on a dark
-# logo reads as one shape.
-_HALO_WIDTH = 3
+# White outline around the front logo. Without a separating edge, a dark logo
+# on a dark logo reads as a single shape.
+_HALO_WIDTH = 4
+
+# Keeps antialiased edges off the crop boundary.
+_SAFE_MARGIN = 2
+
+# THE knob. How much of a logo's width the other one covers. Raising it buys
+# larger logos; past roughly half, the back team stops being recognisable.
+_LOGO_OVERLAP = 0.45
+
+
+def _fit_to_circle(overlap: float) -> tuple[int, int]:
+    """
+    Largest logo box that fits the circle at this overlap, and its offset.
+
+    Deriving the size instead of hard-coding it means the two can't be set to
+    an inconsistent pair that quietly clips. With each logo centred `offset`
+    along the diagonal, its far edge sits at:
+
+        offset * sqrt(2) + box / 2 + halo        (from the canvas centre)
+
+    and `offset * sqrt(2)` is half the centre-to-centre distance, which is
+    `box * (1 - overlap) / 2`. Setting that reach equal to the radius and
+    solving for box gives the line below.
+    """
+    usable = _CANVAS_SIZE - 2 * (_HALO_WIDTH + _SAFE_MARGIN)
+    box = int(usable / (2 - overlap))
+    offset = int(box * (1 - overlap) / (2 * sqrt(2)))
+
+    return box, offset
+
+
+_LOGO_BOX, _DIAGONAL_OFFSET = _fit_to_circle(_LOGO_OVERLAP)
 
 # Composites are stable for a season, so this is about bounding memory rather
 # than freshness: a caller walking arbitrary ID pairs cannot grow it without
-# limit. ~256 entries of ~20KB caps it around 5MB.
+# limit. ~256 entries of ~30KB caps it around 8MB.
 _icon_cache: TTLCache = TTLCache(maxsize=256, ttl=86_400)
 
 
