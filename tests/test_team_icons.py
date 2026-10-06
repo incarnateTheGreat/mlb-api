@@ -153,6 +153,37 @@ class TestGeometry:
         assert loose > tight
 
 
+class TestSourceResolution:
+    """
+    Logos must always be downscaled, never blown up.
+
+    The logo box is derived from the overlap knob, so a fixed source size
+    silently becomes an upscale once the knob is raised far enough - the one
+    thing guaranteed to look blurry on a phone.
+    """
+
+    def test_source_is_larger_than_the_box_it_fills(self):
+        assert team_icons._LOGO_SOURCE_SIZE >= team_icons._LOGO_BOX
+
+    @pytest.mark.parametrize("overlap", [0.1, 0.3, 0.45, 0.6, 0.75, 0.9])
+    def test_no_overlap_setting_causes_an_upscale(self, overlap):
+        box, _ = team_icons._fit_to_circle(overlap)
+
+        assert team_icons._source_size_for(box) >= box
+
+    def test_prefers_headroom_over_a_near_1to1_resample(self):
+        """Resampling from barely-larger art aliases; 2x downscales cleanly."""
+        assert team_icons._source_size_for(100) >= 200
+
+    def test_falls_back_to_the_largest_offered_size(self):
+        """Beyond what MLB offers, take the biggest rather than overshooting."""
+        assert team_icons._source_size_for(9999) == max(team_icons._SOURCE_SIZES)
+
+    def test_single_logo_fallback_is_not_upscaled_either(self):
+        """It is shown directly at icon size, not composited down."""
+        assert team_icons._SINGLE_LOGO_SIZE >= team_icons._CANVAS_SIZE // 2
+
+
 class TestRenderMatchupIcon:
     async def test_composes_from_fetched_artwork(self):
         with patch.object(

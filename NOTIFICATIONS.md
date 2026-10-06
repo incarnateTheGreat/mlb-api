@@ -256,9 +256,13 @@ after the page was closed, so it must stay publicly reachable (no auth).
   61% of the canvas and 58% of the back one still shows.
 - The canvas is 256 because Android draws the large icon around that size on
   an xxxhdpi screen; a 192 canvas gets upscaled and goes soft.
-- The front logo gets a white outline traced from its own alpha channel. The
-  two overlap by roughly a third, and without it a dark logo over a dark logo
-  reads as a single shape.
+- The **source** size is picked from the sizes MLB offers (192/256/384/512) to
+  be at least twice the logo box, so the artwork is always downscaled and
+  never blown up. It has to be derived, because the box grows with the overlap
+  knob — a fixed source would silently become an upscale once the knob passed
+  about 0.75, which is the one thing guaranteed to look blurry.
+- The front logo gets a white outline traced from its own alpha channel.
+  Without it a dark logo over a dark logo reads as a single shape.
 - Results are cached per `(back, front)` pair for a day. Order is part of the
   key, since swapping which team is in front is a different image. Failures
   are **not** cached, so a CDN blip doesn't poison a matchup.

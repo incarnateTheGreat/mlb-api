@@ -200,9 +200,15 @@ class TestNotificationIcon:
         assert team_logo_url(None) is None
 
     def test_team_logo_url_shape(self):
-        assert (
-            team_logo_url(134)
-            == "https://midfield.mlbstatic.com/v1/team/134/spots/192"
+        """
+        Points at MLB's CDN for the given team.
+
+        The size is deliberately not pinned here - it is derived from the
+        canvas so the logo is never upscaled, and tests/test_team_icons.py
+        covers that. Hard-coding it again would just duplicate the constant.
+        """
+        assert team_logo_url(134).startswith(
+            "https://midfield.mlbstatic.com/v1/team/134/spots/"
         )
 
     def test_matchup_icon_url_shape(self):

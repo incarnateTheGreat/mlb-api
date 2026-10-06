@@ -21,9 +21,10 @@ from PIL import Image, ImageFilter
 
 logger = logging.getLogger(__name__)
 
-# Source artwork: a genuine 192x192 PNG with a transparent background.
+# Source artwork. MLB serves these square sizes (all verified 200), and the
+# art is full bleed - no transparent margin.
 _TEAM_LOGO_URL = "https://midfield.mlbstatic.com/v1/team/{team_id}/spots/{size}"
-_LOGO_SIZE = 192
+_SOURCE_SIZES = (192, 256, 384, 512)
 
 # Browser-facing path for the composite. Relative on purpose: the service
 # worker resolves it against the frontend origin, where `/api/*` is proxied
@@ -78,6 +79,29 @@ def _fit_to_circle(overlap: float) -> tuple[int, int]:
 
 _LOGO_BOX, _DIAGONAL_OFFSET = _fit_to_circle(_LOGO_OVERLAP)
 
+
+def _source_size_for(target: int) -> int:
+    """
+    Smallest offered source that downscales cleanly to `target`.
+
+    Tied to the target rather than fixed, because the logo box is derived from
+    _LOGO_OVERLAP: a hard-coded source silently becomes an UPSCALE once the
+    knob is raised far enough, which is the one thing guaranteed to look
+    blurry. Prefers 2x headroom, since a near-1:1 resample aliases.
+    """
+    for size in _SOURCE_SIZES:
+        if size >= target * 2:
+            return size
+
+    return _SOURCE_SIZES[-1]
+
+
+_LOGO_SOURCE_SIZE = _source_size_for(_LOGO_BOX)
+
+# The single-logo fallback is shown directly, so it wants the canvas size
+# rather than the per-logo size.
+_SINGLE_LOGO_SIZE = _source_size_for(_CANVAS_SIZE // 2)
+
 # Composites are stable for a season, so this is about bounding memory rather
 # than freshness: a caller walking arbitrary ID pairs cannot grow it without
 # limit. ~256 entries of ~30KB caps it around 8MB.
@@ -89,7 +113,7 @@ def team_logo_url(team_id: int | None) -> str | None:
     if team_id is None:
         return None
 
-    return _TEAM_LOGO_URL.format(team_id=team_id, size=_LOGO_SIZE)
+    return _TEAM_LOGO_URL.format(team_id=team_id, size=_SINGLE_LOGO_SIZE)
 
 
 def matchup_icon_url(
@@ -147,7 +171,7 @@ def _compose(back_png: bytes, front_png: bytes) -> bytes:
 
 async def _fetch_logo(client: httpx.AsyncClient, team_id: int) -> bytes:
     """Download one team's source logo."""
-    url = _TEAM_LOGO_URL.format(team_id=team_id, size=_LOGO_SIZE)
+    url = _TEAM_LOGO_URL.format(team_id=team_id, size=_LOGO_SOURCE_SIZE)
     response = await client.get(url)
     response.raise_for_status()
 
