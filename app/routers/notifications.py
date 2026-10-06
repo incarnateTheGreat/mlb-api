@@ -10,8 +10,9 @@ X-CSRF-Token. apiFetch() in the React Router app does this automatically.
 """
 
 import logging
+from uuid import uuid4
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Path, Request, Response
 from pydantic import BaseModel, Field
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -19,6 +20,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.database import get_db
 from app.models.notifications import PushSubscription
 from app.services import push_service
+from app.services.team_icons import matchup_icon_url, render_matchup_icon
 
 logger = logging.getLogger(__name__)
 
@@ -44,6 +46,17 @@ _MOBILE_UA_TOKENS = (
 
 # A User-Agent is attacker-controlled and unbounded; cap it before storage.
 _MAX_USER_AGENT_LENGTH = 512
+
+# Stand-in matchup for the test notification's icon: Pirates behind, Cubs in
+# front. Exercises the composite path rather than a simpler single logo, so
+# the test button verifies what a real scoring play will actually send.
+_TEST_ICON_BACK_TEAM_ID = 134
+_TEST_ICON_FRONT_TEAM_ID = 112
+
+# MLB team IDs are small positive integers. Bounding them keeps a caller from
+# walking arbitrary values through the logo fetcher.
+_MIN_TEAM_ID = 1
+_MAX_TEAM_ID = 9999
 
 
 def classify_device(
@@ -123,6 +136,39 @@ async def get_vapid_public_key() -> dict:
         )
 
     return {"publicKey": push_service.get_public_key()}
+
+
+@router.get(
+    "/matchup-icon/{back_team_id}/{front_team_id}.png",
+    response_class=Response,
+    responses={
+        200: {"content": {"image/png": {}}, "description": "Composite logo"},
+        404: {"description": "Logo artwork unavailable"},
+    },
+)
+async def get_matchup_icon(
+    back_team_id: int = Path(ge=_MIN_TEAM_ID, le=_MAX_TEAM_ID),
+    front_team_id: int = Path(ge=_MIN_TEAM_ID, le=_MAX_TEAM_ID),
+) -> Response:
+    """
+    Two team logos staggered into one 192x192 PNG.
+
+    A notification carries a single `icon` URL, so pairing the logos has to
+    happen server side. The browser fetches this while rendering the
+    notification, including when the page is closed.
+    """
+    icon = await render_matchup_icon(back_team_id, front_team_id)
+
+    if icon is None:
+        raise HTTPException(status_code=404, detail="Logo artwork unavailable")
+
+    return Response(
+        content=icon,
+        media_type="image/png",
+        # Logos are stable for a season, so let the browser keep it rather
+        # than refetching on every notification.
+        headers={"Cache-Control": "public, max-age=86400, immutable"},
+    )
 
 
 @router.post(
@@ -243,6 +289,17 @@ async def send_test_notification(
             "title": "Test notification",
             "body": "Scoring play alerts are working.",
             "gamePk": body.game_pk,
+            # A fixed matchup: this endpoint exists to prove the delivery
+            # path works, and the icon is part of that path. Which teams they
+            # are does not matter, only that it arrives instead of the app icon.
+            "icon": matchup_icon_url(
+                _TEST_ICON_BACK_TEAM_ID,
+                _TEST_ICON_FRONT_TEAM_ID,
+            ),
+            # Unique per send. Without it the service worker derives a tag
+            # from gamePk alone, and a repeat test would silently replace the
+            # previous notification rather than alerting again.
+            "tag": f"test-{uuid4()}",
         },
     )
 

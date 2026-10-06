@@ -19,9 +19,11 @@ from app.services import scoring_watcher
 from app.services.scoring_watcher import (
     _build_final_payload,
     _build_payload,
+    _extract_team_ids,
     _handle_final,
     _ordinal,
 )
+from app.services.team_icons import matchup_icon_url, team_logo_url
 
 
 class TestPushUrgency:
@@ -178,10 +180,156 @@ class TestBuildFinalPayload:
         assert payload["body"] == "HOU 0 – SEA 0"  # Defaults to 0 runs
 
 
+class TestNotificationIcon:
+    """The icon identifies the team at a glance.
+
+    Android renders `icon` as the notification's large icon. iOS and macOS
+    Safari ignore it and fall back to the manifest icon, so every case here
+    must also be safe when the field is simply dropped.
+    """
+
+    def test_extract_team_ids(self):
+        feed = {"gameData": {"teams": {"away": {"id": 134}, "home": {"id": 112}}}}
+
+        assert _extract_team_ids(feed) == (134, 112)
+
+    def test_extract_team_ids_missing(self):
+        assert _extract_team_ids({}) == (None, None)
+
+    def test_team_logo_url_none(self):
+        assert team_logo_url(None) is None
+
+    def test_team_logo_url_shape(self):
+        """
+        Points at MLB's CDN for the given team.
+
+        The size is deliberately not pinned here - it is derived from the
+        canvas so the logo is never upscaled, and tests/test_team_icons.py
+        covers that. Hard-coding it again would just duplicate the constant.
+        """
+        assert team_logo_url(134).startswith(
+            "https://midfield.mlbstatic.com/v1/team/134/spots/"
+        )
+
+    def test_matchup_icon_url_shape(self):
+        """Back team first, front team second - the front one is drawn on top."""
+        assert (
+            matchup_icon_url(134, 112)
+            == "/api/notifications/matchup-icon/134/112.png"
+        )
+
+    def test_matchup_icon_url_is_relative(self):
+        """The service worker resolves this against the frontend origin, where
+        `/api/*` proxies to this API. An absolute URL would need the API's
+        public hostname as another environment variable."""
+        assert matchup_icon_url(134, 112).startswith("/api/")
+
+    def test_matchup_icon_url_falls_back_to_single_logo(self):
+        """One known ID still beats no icon at all."""
+        assert matchup_icon_url(None, 112) == team_logo_url(112)
+        assert matchup_icon_url(134, None) == team_logo_url(134)
+
+    def test_matchup_icon_url_none_when_both_unknown(self):
+        assert matchup_icon_url(None, None) is None
+
+    def test_top_inning_puts_away_logo_in_front(self):
+        """Away team bats in the top, so the away logo leads the pair."""
+        play = {
+            "about": {"inning": 5, "isTopInning": True},
+            "result": {"description": "Single", "awayScore": 4, "homeScore": 2},
+            "atBatIndex": 42,
+        }
+        payload = _build_payload(
+            play,
+            game_pk=123,
+            away_abbr="PIT",
+            home_abbr="CHC",
+            away_id=134,
+            home_id=112,
+        )
+
+        assert payload["icon"] == matchup_icon_url(112, 134)
+
+    def test_bottom_inning_puts_home_logo_in_front(self):
+        play = {
+            "about": {"inning": 3, "isTopInning": False},
+            "result": {"description": "Homer", "awayScore": 1, "homeScore": 2},
+            "atBatIndex": 15,
+        }
+        payload = _build_payload(
+            play,
+            game_pk=456,
+            away_abbr="PIT",
+            home_abbr="CHC",
+            away_id=134,
+            home_id=112,
+        )
+
+        assert payload["icon"] == matchup_icon_url(134, 112)
+
+    def test_icon_omitted_when_team_ids_unknown(self):
+        """No ID in the feed means no icon key at all, not a null."""
+        play = {
+            "about": {"inning": 1, "isTopInning": True},
+            "result": {"description": "Single", "awayScore": 1, "homeScore": 0},
+            "atBatIndex": 1,
+        }
+        payload = _build_payload(play, game_pk=1, away_abbr="LAD", home_abbr="SFG")
+
+        assert "icon" not in payload
+
+    def test_icon_falls_back_to_single_logo_with_one_id(self):
+        """A half-populated feed still gets the scoring team's logo."""
+        play = {
+            "about": {"inning": 1, "isTopInning": True},
+            "result": {"description": "Single", "awayScore": 1, "homeScore": 0},
+            "atBatIndex": 1,
+        }
+        payload = _build_payload(
+            play,
+            game_pk=1,
+            away_abbr="LAD",
+            home_abbr="SFG",
+            away_id=119,
+        )
+
+        assert payload["icon"] == team_logo_url(119)
+
+    def test_final_puts_winner_in_front_when_away_wins(self):
+        payload = _build_final_payload(
+            _feed_with_score(away=5, home=3),
+            game_pk=555,
+            away_abbr="ATL",
+            home_abbr="WSH",
+            away_id=144,
+            home_id=120,
+        )
+
+        assert payload["icon"] == matchup_icon_url(120, 144)
+
+    def test_final_puts_winner_in_front_when_home_wins(self):
+        payload = _build_final_payload(
+            _feed_with_score(away=2, home=6),
+            game_pk=555,
+            away_abbr="ATL",
+            home_abbr="WSH",
+            away_id=144,
+            home_id=120,
+        )
+
+        assert payload["icon"] == matchup_icon_url(144, 120)
+
+    def test_final_icon_omitted_when_team_ids_unknown(self):
+        payload = _build_final_payload(
+            _feed_with_score(), game_pk=555, away_abbr="ATL", home_abbr="WSH"
+        )
+
+        assert "icon" not in payload
+
+
 def _subscription(endpoint: str = "https://push.example/abc"):
     """A stand-in for a PushSubscription row."""
     return Mock(endpoint=endpoint, p256dh="p", auth="a", game_pk=1)
-
 
 def _feed_with_score(away: int = 5, home: int = 3) -> dict:
     return {
