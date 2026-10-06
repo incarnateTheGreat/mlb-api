@@ -28,6 +28,12 @@ python-dotenv>=1.0.0
 # AI
 anthropic>=0.18.0
 
+# Web Push notifications (VAPID-signed messages to browser push services)
+pywebpush>=2.0.0
+
+# Image composition (staggered team-logo notification icons)
+pillow>=10.0.0
+
 # Math/stats (for sabermetrics)
 numpy>=1.26.0
 

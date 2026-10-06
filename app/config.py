@@ -70,10 +70,25 @@ class Settings(BaseSettings):
     cookie_domain: Optional[str] = None  # e.g., ".mlbsite.com" for production
     frontend_url: str = "http://localhost:5174"  # For CORS
     
+    # Web Push (VAPID)
+    # Generate a keypair with: vapid --gen  (or see app/services/push_service.py)
+    # The public key is shared with the browser; the private key must stay secret.
+    vapid_public_key: str | None = None
+    vapid_private_key: str | None = None
+    # Contact URI for the push service to reach you if there's a problem.
+    vapid_subject: str = "mailto:admin@example.com"
+    
+    # Scoring play watcher
+    watcher_enabled: bool = True
+    watcher_poll_seconds: int = 10
+    
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",
         case_sensitive=False,
+        # Ignore env vars this branch doesn't define, so one .env can be shared
+        # across branches that add their own settings.
+        extra="ignore",
     )
 
 

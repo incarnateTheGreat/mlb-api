@@ -1,0 +1,51 @@
+name: Sync player index
+
+# MLB's API has no name search, so /search reads from our own copy of the
+# player corpus. That copy only changes when this job runs — without it,
+# debuts, trades and retirements never reach the search box.
+#
+# Note: scheduled workflows only run on the default branch, and GitHub
+# disables them after 60 days without repository activity.
+on:
+    schedule:
+        # 1st of each month at 10:00 UTC. The index only changes when players
+        # debut, get traded or retire, so weekly was mostly re-writing
+        # identical rows. Monthly still picks up a season's debuts while
+        # they're current, and the offseason months are nearly no-ops.
+        #
+        # Use workflow_dispatch instead of waiting for the schedule when a
+        # specific player needs to show up sooner.
+        - cron: "0 10 1 * *"
+    workflow_dispatch:
+
+# Every write is an upsert, so overlapping runs would compete for the same
+# rows rather than corrupt them — but there's no reason to let them.
+concurrency:
+    group: sync-player-index
+    cancel-in-progress: false
+
+jobs:
+    sync:
+        runs-on: ubuntu-latest
+        # The job walks every season since 1876, so it is slow by design.
+        timeout-minutes: 30
+
+        steps:
+            - uses: actions/checkout@v4
+
+            - name: Set up Python 3.12
+              uses: actions/setup-python@v5
+              with:
+                  python-version: "3.12"
+                  cache: "pip"
+
+            - name: Install dependencies
+              run: |
+                  python -m pip install --upgrade pip
+                  pip install -r requirements.txt
+
+            - name: Sync player and team index
+              run: python -m scripts.sync_player_index
+              env:
+                  DATABASE_URL: ${{ secrets.DATABASE_URL }}
+                  PYTHONWARNINGS: "ignore:Unverified HTTPS request"
