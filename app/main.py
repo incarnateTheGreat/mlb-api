@@ -25,6 +25,7 @@ from app.routers import (
     matchups,
     analysis,
     notifications,
+    preview,
     search,
     standings,
     teams,
@@ -103,6 +104,7 @@ app.include_router(auth.router)  # No prefix, routes are /auth/*
 app.include_router(games.router, prefix="/games", tags=["games"])
 app.include_router(players.router, prefix="/players", tags=["players"])
 app.include_router(matchups.router, prefix="/matchups", tags=["matchups"])
+app.include_router(preview.router, prefix="/games", tags=["preview"])
 app.include_router(analysis.router, prefix="/analysis", tags=["analysis"])
 app.include_router(standings.router, prefix="/standings", tags=["standings"])
 app.include_router(teams.router, prefix="/teams", tags=["teams"])

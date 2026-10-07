@@ -118,26 +118,49 @@ IMPORTANT: Return ONLY valid JSON, no markdown code blocks or extra text."""
         pitcher_id: int,
         pitcher_stats: dict,
         historical_matchup: Optional[dict] = None,
+        matchup_facts: Optional[str] = None,
+        computed_confidence: Optional[float] = None,
         max_tokens: int = 1024,
         temperature: float = 0.7,
     ) -> tuple[MatchupAnalysis, AIGenerationMetadata]:
-        """Generate AI-powered batter vs pitcher matchup analysis."""
-        start_time = time.time()
-        
-        prompt = f"""You are an expert baseball analyst specializing in matchup analysis.
-Analyze the following batter vs pitcher matchup:
+        """
+        Generate AI-powered batter vs pitcher matchup analysis.
 
-BATTER: {batter_name} (ID: {batter_id})
+        When `matchup_facts` is supplied it replaces the raw stat dump with a
+        pre-regressed fact block from app.services.matchup_context. That keeps
+        every number deterministic and leaves the model to narrate rather than
+        compute. `computed_confidence` likewise overrides whatever the model
+        reports, because self-assessed confidence from an LLM is not grounded
+        in sample size.
+        """
+        start_time = time.time()
+
+        if matchup_facts:
+            context_section = matchup_facts
+            confidence_instruction = (
+                '- "confidence": omit this field, it is computed upstream'
+            )
+        else:
+            context_section = f"""BATTER: {batter_name} (ID: {batter_id})
 Season Stats: {json.dumps(batter_stats, indent=2)}
 
 PITCHER: {pitcher_name} (ID: {pitcher_id})
 Season Stats: {json.dumps(pitcher_stats, indent=2)}
 
-{"Historical matchup data: " + json.dumps(historical_matchup) if historical_matchup else "No historical matchup data available."}
+{"Historical matchup data: " + json.dumps(historical_matchup) if historical_matchup else "No historical matchup data available."}"""
+            confidence_instruction = (
+                '- "confidence": A number between 0 and 1 indicating '
+                "confidence in your analysis"
+            )
+
+        prompt = f"""You are an expert baseball analyst specializing in matchup analysis.
+Analyze the following batter vs pitcher matchup:
+
+{context_section}
 
 Respond with a JSON object containing:
 - "advantage": "batter", "pitcher", or "neutral"
-- "confidence": A number between 0 and 1 indicating confidence in your analysis
+{confidence_instruction}
 - "analysis": A detailed 2-3 paragraph breakdown of the matchup
 - "key_factors": An array of 3-5 key factors influencing this matchup
 - "prediction": A one-sentence prediction for how this matchup will play out
@@ -158,6 +181,13 @@ IMPORTANT: Return ONLY valid JSON, no markdown code blocks or extra text."""
         # Extract historical stats if available
         hist = historical_matchup or {}
         
+        # A computed confidence always wins over the model's self-report.
+        confidence = (
+            computed_confidence
+            if computed_confidence is not None
+            else parsed.get("confidence", 0.5)
+        )
+
         analysis = MatchupAnalysis(
             batter_id=batter_id,
             batter_name=batter_name,
@@ -168,9 +198,9 @@ IMPORTANT: Return ONLY valid JSON, no markdown code blocks or extra text."""
             career_home_runs=hist.get("home_runs", 0),
             career_strikeouts=hist.get("strikeouts", 0),
             career_walks=hist.get("walks", 0),
-            career_avg=hist.get("avg"),
+            career_avg=hist.get("observed_avg"),
             advantage=parsed.get("advantage", "neutral"),
-            confidence=parsed.get("confidence", 0.5),
+            confidence=confidence,
             analysis=parsed.get("analysis", ""),
             key_factors=parsed.get("key_factors", []),
             prediction=parsed.get("prediction", ""),

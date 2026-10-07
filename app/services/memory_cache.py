@@ -256,6 +256,48 @@ def cached_player_stats(func: Callable[..., T]) -> Callable[..., T]:
     return wrapper
 
 
+def cached_batter_vs_pitcher(func: Callable[..., T]) -> Callable[..., T]:
+    """
+    Decorator to cache career batter-vs-pitcher splits.
+
+    Career head-to-head totals only move when the two players actually
+    face each other, so the 10-minute player TTL is generous here.
+    """
+    @wraps(func)
+    async def wrapper(self, batter_id: int, pitcher_id: int, *args, **kwargs) -> T:
+        cache_key = f"h2h:{batter_id}:{pitcher_id}"
+
+        if cache_key in _player_cache:
+            return _player_cache[cache_key]
+
+        result = await func(self, batter_id, pitcher_id, *args, **kwargs)
+        _player_cache[cache_key] = result
+        return result
+
+    return wrapper
+
+
+def cached_platoon_splits(func: Callable[..., T]) -> Callable[..., T]:
+    """
+    Decorator to cache vs-LHP/vs-RHP platoon splits.
+
+    Season-long splits barely move game to game, so these share the
+    10-minute player cache.
+    """
+    @wraps(func)
+    async def wrapper(self, player_id: int, season: int, group: str = "hitting", *args, **kwargs) -> T:
+        cache_key = f"platoon:{player_id}:{season}:{group}"
+
+        if cache_key in _player_cache:
+            return _player_cache[cache_key]
+
+        result = await func(self, player_id, season, group, *args, **kwargs)
+        _player_cache[cache_key] = result
+        return result
+
+    return wrapper
+
+
 def cached_player_profile(func: Callable[..., T]) -> Callable[..., T]:
     """
     Decorator to cache player profile API calls.
