@@ -153,9 +153,13 @@ def summarize_season_series(
 
     The win-loss count alone tends to read the same for every matchup, so
     the shape of the series is summarised too: how many games were tight,
-    how many were shutouts, how lopsided the worst one got. Those are what
-    distinguish a 3-3 split decided by one run five times from a 3-3 split
-    of blowouts.
+    how many were shutouts, how often the host won, how lopsided the worst
+    one got. Those are what distinguish a 3-3 split decided by one run five
+    times from a 3-3 split of blowouts.
+
+    These are deliberately raw counts. Deciding which of them is unusual
+    enough to be worth a sentence needs a league baseline, and that is a
+    presentation question — the caller makes it.
 
     All of it comes from the payload the caller already fetched. The
     schedule is hydrated with linescores and decisions regardless, so none
@@ -171,6 +175,7 @@ def summarize_season_series(
     one_run_games = 0
     shutouts = 0
     extra_inning_games = 0
+    host_wins = 0
     meetings: list[dict[str, Any]] = []
     widest: Optional[dict[str, Any]] = None
     widest_margin = -1
@@ -190,6 +195,8 @@ def summarize_season_series(
 
         if meeting["extra_innings"]:
             extra_inning_games += 1
+        if meeting["hosted_by_team_id"] == winner_id:
+            host_wins += 1
 
         away_score = meeting["away_team_score"]
         home_score = meeting["home_team_score"]
@@ -227,6 +234,7 @@ def summarize_season_series(
         "one_run_games": one_run_games,
         "shutouts": shutouts,
         "extra_inning_games": extra_inning_games,
+        "host_wins": host_wins,
         "largest_margin": widest,
         "last_meeting": meetings[-1] if meetings else None,
     }

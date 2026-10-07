@@ -285,6 +285,16 @@ class TestSeasonSeriesShape:
 
         assert series["extra_inning_games"] == 1
 
+    def test_counts_meetings_won_by_the_hosting_club(self):
+        series = summarize_season_series(
+            self._six_game_series(), away_id=BREWERS, home_id=PADRES
+        )
+
+        # Milwaukee hosted the first three and won one of them; San Diego
+        # hosted the last three and won two. Four would mean the count had
+        # been read off today's home club rather than each night's host.
+        assert series["host_wins"] == 3
+
     def test_identifies_the_most_lopsided_meeting(self):
         series = summarize_season_series(
             self._six_game_series(), away_id=BREWERS, home_id=PADRES
