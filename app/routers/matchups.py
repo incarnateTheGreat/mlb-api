@@ -11,6 +11,7 @@ from app.models.analysis import MatchupAnalysis
 from app.services.mlb_client import get_mlb_client, MLBStatsClient
 from app.services.ai_service import get_ai_service, AIService
 from app.services.matchup_context import (
+    build_expected_rate,
     build_h2h_context,
     build_platoon_context,
     composite_confidence,
@@ -76,11 +77,13 @@ async def get_batter_vs_pitcher(
         pitcher_stats,
         h2h_raw,
         batter_splits,
+        league_rates,
     ) = await asyncio.gather(
         mlb_client.get_player_stats(batter_id, season, "hitting"),
         mlb_client.get_player_stats(pitcher_id, season, "pitching"),
         mlb_client.get_batter_vs_pitcher(batter_id, pitcher_id),
         mlb_client.get_platoon_splits(batter_id, season, "hitting"),
+        mlb_client.get_league_batting_rates(season),
         return_exceptions=True,
     )
 
@@ -89,6 +92,7 @@ async def get_batter_vs_pitcher(
     pitcher_stats = pitcher_stats if isinstance(pitcher_stats, dict) else {}
     h2h_raw = h2h_raw if isinstance(h2h_raw, dict) else {}
     batter_splits = batter_splits if isinstance(batter_splits, dict) else {}
+    league_rates = league_rates if isinstance(league_rates, dict) else {}
 
     h2h = build_h2h_context(
         h2h_stat=h2h_raw,
@@ -100,6 +104,15 @@ async def get_batter_vs_pitcher(
         overall_ops=_parse_rate(batter_stats.get("ops")),
     )
     confidence = composite_confidence(h2h, platoon)
+
+    # log5 blends batter, pitcher and league. Head-to-head evidence feeds in
+    # through the regressed rate when the two have actually met.
+    batter_season_avg = _parse_rate(batter_stats.get("avg"))
+    expected = build_expected_rate(
+        batter_rate=h2h["regressed_avg"] if h2h else batter_season_avg,
+        pitcher_rate=_parse_rate(pitcher_stats.get("avg")),
+        league_rate=league_rates.get("avg"),
+    )
 
     result = {
         "batter": {
@@ -116,6 +129,7 @@ async def get_batter_vs_pitcher(
         },
         "historical_matchup": h2h,
         "platoon_split": platoon,
+        "expected": expected,
         "confidence": confidence,
     }
     

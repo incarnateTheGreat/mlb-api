@@ -12,9 +12,11 @@ from app.services.matchup_context import (
     BORDERLINE_BAND,
     K_BATTING_AVG,
     NOISE_THRESHOLD_AVG,
+    build_expected_rate,
     build_h2h_context,
     build_platoon_context,
     composite_confidence,
+    log5_probability,
     regress_rate,
     render_matchup_facts,
 )
@@ -279,3 +281,94 @@ def test_prompt_block_carries_the_computed_confidence():
     )
 
     assert "COMPUTED CONFIDENCE: 0.61" in block
+
+
+# ============================================================================
+# log5
+# ============================================================================
+
+LEAGUE_AVG = 0.244
+
+
+def test_average_batter_vs_average_pitcher_returns_the_league_rate():
+    """The defining identity of log5 — if it fails, the formula is wrong."""
+    result = log5_probability(LEAGUE_AVG, LEAGUE_AVG, LEAGUE_AVG)
+
+    assert result == pytest.approx(LEAGUE_AVG, abs=1e-9)
+
+
+def test_league_average_pitcher_leaves_the_batter_unchanged():
+    """A perfectly average opponent should add no information either way."""
+    result = log5_probability(0.310, LEAGUE_AVG, LEAGUE_AVG)
+
+    assert result == pytest.approx(0.310, abs=1e-9)
+
+
+def test_league_average_batter_inherits_the_pitcher_rate():
+    """The mirror image of the previous case."""
+    result = log5_probability(LEAGUE_AVG, 0.210, LEAGUE_AVG)
+
+    assert result == pytest.approx(0.210, abs=1e-9)
+
+
+def test_tough_pitcher_pulls_the_expectation_down():
+    strong = log5_probability(0.300, 0.200, LEAGUE_AVG)
+
+    assert strong is not None
+    assert strong < 0.300
+
+
+def test_weak_pitcher_pushes_the_expectation_up():
+    weak = log5_probability(0.300, 0.300, LEAGUE_AVG)
+
+    assert weak is not None
+    assert weak > 0.300
+
+
+def test_result_always_stays_a_probability():
+    """Extremes must not escape 0..1 — the reason odds are used at all."""
+    for batter in (0.001, 0.2, 0.5, 0.9, 0.999):
+        for pitcher in (0.001, 0.2, 0.5, 0.9, 0.999):
+            result = log5_probability(batter, pitcher, LEAGUE_AVG)
+            assert result is not None
+            assert 0.0 < result < 1.0
+
+
+def test_log5_is_symmetric_between_batter_and_pitcher():
+    """Neither side is privileged by the formula."""
+    a = log5_probability(0.280, 0.230, LEAGUE_AVG)
+    b = log5_probability(0.230, 0.280, LEAGUE_AVG)
+
+    assert a == pytest.approx(b)
+
+
+@pytest.mark.parametrize(
+    "batter, pitcher, league",
+    [
+        (None, 0.25, 0.244),
+        (0.25, None, 0.244),
+        (0.25, 0.25, None),
+        (0.0, 0.25, 0.244),  # zero produces infinite odds
+        (1.0, 0.25, 0.244),
+        (0.25, 0.25, 0.0),
+    ],
+)
+def test_log5_refuses_unusable_inputs(batter, pitcher, league):
+    assert log5_probability(batter, pitcher, league) is None
+
+
+def test_expected_rate_reports_its_inputs():
+    block = build_expected_rate(0.230, 0.256, 0.244)
+
+    assert block is not None
+    # Inputs are echoed so the UI can explain why the number moved.
+    assert block["batter_rate"] == 0.230
+    assert block["pitcher_rate"] == 0.256
+    assert block["league_rate"] == 0.244
+    # May allows slightly above league average, so the batter gains a little.
+    assert block["expected_avg"] > 0.230
+    assert block["delta_vs_batter"] > 0
+
+
+def test_expected_rate_is_none_without_a_pitcher_rate():
+    assert build_expected_rate(0.250, None, 0.244) is None

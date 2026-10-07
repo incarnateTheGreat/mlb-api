@@ -8,6 +8,7 @@ from datetime import date
 from typing import Any, Optional
 
 from app.services.memory_cache import (
+    cached_league_rates,
     cached_team_info,
     cached_team_detail,
     cached_team_schedule,
@@ -213,6 +214,45 @@ class TeamsMixin:
         }
         
         return await self._get("/schedule", params=params)
+
+    @cached_league_rates
+    async def get_league_batting_rates(self, season: int) -> dict[str, float]:
+        """
+        League-wide batting rates, aggregated from all 30 clubs.
+
+        log5 needs a real league baseline; hardcoding one would silently bias
+        every projection as run environments drift year to year. There is no
+        single "league totals" endpoint, so sum the per-team totals instead —
+        that is the definition of the league rate, not an approximation.
+
+        Returns an empty dict when the upstream shape is unusable, so callers
+        can fall back rather than divide by zero.
+        """
+        response = await self._get(
+            "/teams/stats",
+            params={
+                "stats": "season",
+                "group": "hitting",
+                "sportId": 1,
+                "season": season,
+            },
+        )
+
+        hits = 0
+        at_bats = 0
+        for entry in response.get("stats", []):
+            for split in entry.get("splits") or []:
+                stat = split.get("stat") or {}
+                try:
+                    hits += int(stat.get("hits") or 0)
+                    at_bats += int(stat.get("atBats") or 0)
+                except (TypeError, ValueError):
+                    continue
+
+        if at_bats <= 0:
+            return {}
+
+        return {"avg": hits / at_bats, "at_bats": at_bats, "hits": hits}
 
     async def get_pitcher_season_stats(
         self,

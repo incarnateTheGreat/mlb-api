@@ -13,6 +13,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 
 from app.services.game_trivia import build_trivia
 from app.services.matchup_context import (
+    build_expected_rate,
     build_h2h_context,
     build_platoon_context,
     composite_confidence,
@@ -98,6 +99,8 @@ async def _build_lineup_row(
     pitcher_id: int,
     pitcher_hand: str,
     season: int,
+    pitcher_avg_against: Optional[float] = None,
+    league_avg: Optional[float] = None,
 ) -> dict[str, Any]:
     """Assemble one batter's regressed matchup line against the starter."""
     async with semaphore:
@@ -122,14 +125,45 @@ async def _build_lineup_row(
         overall_ops=_parse_rate(season_stats.get("ops")),
     )
 
+    season_avg = _parse_rate(season_stats.get("avg"))
+
+    # Prefer the head-to-head-regressed rate as the batter input: it already
+    # folds in whatever evidence this pairing has produced. Without history,
+    # the season average is the honest starting point.
+    batter_rate = h2h["regressed_avg"] if h2h else season_avg
+
+    expected = build_expected_rate(
+        batter_rate=batter_rate,
+        pitcher_rate=pitcher_avg_against,
+        league_rate=league_avg,
+    )
+
     return {
         **batter,
-        "season_avg": _parse_rate(season_stats.get("avg")),
+        "season_avg": season_avg,
         "season_ops": _parse_rate(season_stats.get("ops")),
         "head_to_head": h2h,
         "platoon_split": platoon,
+        "expected": expected,
         "confidence": composite_confidence(h2h, platoon),
     }
+
+
+async def _pitcher_avg_against(
+    mlb_client: MLBStatsClient, pitcher_id: int, season: int
+) -> Optional[float]:
+    """
+    The batting average this pitcher has allowed, for the log5 blend.
+
+    Built on every batter he has faced this season, which is why it carries
+    far more evidence than any single head-to-head sample.
+    """
+    try:
+        stats = await mlb_client.get_player_stats(pitcher_id, season, "pitching")
+    except Exception:
+        return None
+
+    return _parse_rate((stats or {}).get("avg"))
 
 
 async def _build_side(
@@ -138,9 +172,13 @@ async def _build_side(
     lineup: list[dict[str, Any]],
     pitcher: dict[str, Any],
     season: int,
+    league_avg: Optional[float] = None,
 ) -> list[dict[str, Any]]:
     if not pitcher.get("id"):
         return []
+
+    # One lookup for the whole lineup rather than one per batter.
+    pitcher_avg = await _pitcher_avg_against(mlb_client, pitcher["id"], season)
 
     return list(
         await asyncio.gather(
@@ -152,6 +190,8 @@ async def _build_side(
                     pitcher["id"],
                     pitcher["hand"],
                     season,
+                    pitcher_avg_against=pitcher_avg,
+                    league_avg=league_avg,
                 )
                 for batter in lineup
             )
@@ -318,14 +358,32 @@ async def get_game_preview(
         mlb_client, game, sides, season
     )
 
+    # One league baseline for the whole request. A failure here only costs
+    # the log5 column, so it must not take down the rest of the preview.
+    try:
+        league_rates = await mlb_client.get_league_batting_rates(season)
+    except Exception:
+        league_rates = {}
+    league_avg = league_rates.get("avg")
+
     # Each lineup faces the opposing team's starter.
     semaphore = asyncio.Semaphore(_MAX_CONCURRENT_LOOKUPS)
     away_rows, home_rows, trivia = await asyncio.gather(
         _build_side(
-            mlb_client, semaphore, lineups["away"], sides["home"]["pitcher"], season
+            mlb_client,
+            semaphore,
+            lineups["away"],
+            sides["home"]["pitcher"],
+            season,
+            league_avg=league_avg,
         ),
         _build_side(
-            mlb_client, semaphore, lineups["home"], sides["away"]["pitcher"], season
+            mlb_client,
+            semaphore,
+            lineups["home"],
+            sides["away"]["pitcher"],
+            season,
+            league_avg=league_avg,
         ),
         _fetch_trivia(
             mlb_client, sides["away"]["team_id"], sides["home"]["team_id"], season

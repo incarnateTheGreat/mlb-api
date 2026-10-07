@@ -208,6 +208,94 @@ def build_h2h_context(
 
 
 # ============================================================================
+# log5 — combining batter, pitcher and league
+# ============================================================================
+
+def log5_probability(
+    batter_rate: float,
+    pitcher_rate: float,
+    league_rate: float,
+) -> Optional[float]:
+    """
+    Expected rate when a given batter faces a given pitcher (Bill James, 1981).
+
+    Regression alone only ever asks "how good is this batter?" — the pitcher
+    never enters the sum except through the tiny head-to-head sample. log5
+    fixes that by combining three season-long rates, each built on hundreds
+    or thousands of plate appearances.
+
+    The intuition, without the algebra:
+
+    1. Convert each rate to *odds* (``p / (1 - p)``). Odds multiply cleanly
+       where probabilities do not — this is the same reason bookmakers quote
+       odds rather than percentages.
+    2. A batter faces a pitcher, so multiply the batter's odds by the
+       pitcher's odds.
+    3. That double-counts the league, since both rates were already measured
+       against league-average opposition. Divide it back out once.
+    4. Convert the result back to a probability.
+
+    So a .300 hitter against a pitcher who allows .280 does better than .300,
+    but not .300 + .032 — the lift shrinks as rates approach the extremes,
+    which is what keeps the output inside 0 and 1.
+
+    Two boundary cases are worth knowing, both verifiable by hand:
+
+    - League-average batter vs league-average pitcher returns the league rate.
+    - Any batter vs a league-average pitcher returns that batter's own rate.
+
+    Returns None when any input is missing or sits outside (0, 1), because a
+    rate of exactly 0 or 1 produces infinite odds.
+    """
+    rates = (batter_rate, pitcher_rate, league_rate)
+    if any(rate is None for rate in rates):
+        return None
+    if not all(0.0 < rate < 1.0 for rate in rates):
+        return None
+
+    # Odds-ratio form. Written as a ratio of two products rather than nested
+    # divisions so the symmetry between batter and pitcher stays visible.
+    favorable = batter_rate * pitcher_rate / league_rate
+    against = (
+        (1.0 - batter_rate) * (1.0 - pitcher_rate) / (1.0 - league_rate)
+    )
+
+    total = favorable + against
+    if total <= 0:
+        return None
+
+    return favorable / total
+
+
+def build_expected_rate(
+    batter_rate: Optional[float],
+    pitcher_rate: Optional[float],
+    league_rate: Optional[float],
+) -> Optional[dict[str, Any]]:
+    """
+    Package a log5 projection alongside the inputs that produced it.
+
+    Keeping the three inputs on the response means the UI can explain *why*
+    a projection moved, rather than presenting an unsourced number.
+    """
+    if batter_rate is None or pitcher_rate is None or league_rate is None:
+        return None
+
+    expected = log5_probability(batter_rate, pitcher_rate, league_rate)
+    if expected is None:
+        return None
+
+    return {
+        "expected_avg": round(expected, 4),
+        "batter_rate": round(batter_rate, 4),
+        "pitcher_rate": round(pitcher_rate, 4),
+        "league_rate": round(league_rate, 4),
+        # Positive means the pitcher raises the batter's expectation.
+        "delta_vs_batter": round(expected - batter_rate, 4),
+    }
+
+
+# ============================================================================
 # Platoon splits
 # ============================================================================
 
