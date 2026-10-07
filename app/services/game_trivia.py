@@ -84,6 +84,65 @@ def _series_leader(
     return None
 
 
+def _scores_by_team(game: dict[str, Any]) -> dict[int, int]:
+    """
+    Map team id to final score for one meeting.
+
+    Keyed by team rather than by slot on purpose. A head-to-head schedule
+    covers meetings at *both* ballparks, so a game's "away"/"home" slots
+    describe that night's venue, not the fixture being previewed. Summing
+    the slots directly would add one club's runs in June to the other's in
+    September.
+    """
+    scores: dict[int, int] = {}
+    for side in ("away", "home"):
+        entry = (game.get("teams") or {}).get(side) or {}
+        team_id = (entry.get("team") or {}).get("id")
+        score = entry.get("score")
+        if isinstance(team_id, int) and isinstance(score, int):
+            scores[team_id] = score
+    return scores
+
+
+def _went_extra_innings(game: dict[str, Any]) -> bool:
+    """True when the game ran past its scheduled length."""
+    linescore = game.get("linescore") or {}
+    played = linescore.get("currentInning")
+    scheduled = linescore.get("scheduledInnings")
+    if isinstance(played, int) and isinstance(scheduled, int):
+        return played > scheduled
+    return False
+
+
+def _hosting_team_id(game: dict[str, Any]) -> Optional[int]:
+    """Which club hosted this particular meeting."""
+    entry = (game.get("teams") or {}).get("home") or {}
+    return (entry.get("team") or {}).get("id")
+
+
+def _meeting(
+    game: dict[str, Any], away_id: int, home_id: int
+) -> dict[str, Any]:
+    """
+    One meeting reduced to the facts a caption might quote.
+
+    Scores are labelled by the clubs in *today's* fixture, so the caller
+    can render them without re-deriving who was hosting back then.
+    """
+    scores = _scores_by_team(game)
+    return {
+        "date": game.get("officialDate"),
+        "away_team_score": scores.get(away_id),
+        "home_team_score": scores.get(home_id),
+        "winner_team_id": _winning_team_id(game),
+        "hosted_by_team_id": _hosting_team_id(game),
+        "extra_innings": _went_extra_innings(game),
+        "winning_pitcher": (
+            (game.get("decisions") or {}).get("winner") or {}
+        ).get("fullName"),
+    }
+
+
 def summarize_season_series(
     schedule: dict[str, Any],
     away_id: int,
@@ -92,11 +151,29 @@ def summarize_season_series(
     """
     Tally completed regular-season meetings between the two clubs.
 
+    The win-loss count alone tends to read the same for every matchup, so
+    the shape of the series is summarised too: how many games were tight,
+    how many were shutouts, how lopsided the worst one got. Those are what
+    distinguish a 3-3 split decided by one run five times from a 3-3 split
+    of blowouts.
+
+    All of it comes from the payload the caller already fetched. The
+    schedule is hydrated with linescores and decisions regardless, so none
+    of these facts costs an extra request.
+
     Postseason games are excluded — the current playoff series is already
     reported separately, and mixing the two would double-count it.
     """
     away_wins = 0
     home_wins = 0
+    away_runs = 0
+    home_runs = 0
+    one_run_games = 0
+    shutouts = 0
+    extra_inning_games = 0
+    meetings: list[dict[str, Any]] = []
+    widest: Optional[dict[str, Any]] = None
+    widest_margin = -1
 
     for game in _completed_regular_season_games(schedule):
         winner_id = _winning_team_id(game)
@@ -104,9 +181,39 @@ def summarize_season_series(
             away_wins += 1
         elif winner_id == home_id:
             home_wins += 1
+        else:
+            # No recorded winner means the row is unusable for a series tally.
+            continue
+
+        meeting = _meeting(game, away_id, home_id)
+        meetings.append(meeting)
+
+        if meeting["extra_innings"]:
+            extra_inning_games += 1
+
+        away_score = meeting["away_team_score"]
+        home_score = meeting["home_team_score"]
+        if away_score is None or home_score is None:
+            continue
+
+        away_runs += away_score
+        home_runs += home_score
+
+        margin = abs(away_score - home_score)
+        if margin == 1:
+            one_run_games += 1
+        if min(away_score, home_score) == 0:
+            shutouts += 1
+        if margin > widest_margin:
+            widest_margin = margin
+            widest = {**meeting, "margin": margin}
 
     if away_wins + home_wins == 0:
         return None
+
+    # The schedule arrives in date order, but sort defensively: a
+    # doubleheader or a rescheduled game can land out of sequence.
+    meetings.sort(key=lambda m: (m["date"] or "", m["winner_team_id"] or 0))
 
     return {
         "games_played": away_wins + home_wins,
@@ -115,6 +222,13 @@ def summarize_season_series(
         "leader_team_id": _series_leader(
             away_wins, home_wins, away_id, home_id
         ),
+        "away_runs": away_runs,
+        "home_runs": home_runs,
+        "one_run_games": one_run_games,
+        "shutouts": shutouts,
+        "extra_inning_games": extra_inning_games,
+        "largest_margin": widest,
+        "last_meeting": meetings[-1] if meetings else None,
     }
 
 
