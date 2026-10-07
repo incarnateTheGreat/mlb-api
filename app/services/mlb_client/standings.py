@@ -10,6 +10,7 @@ from typing import Any
 import httpx
 
 from app.services.memory_cache import cached_standings
+from app.services.mlb_client.base import get_ssl_context
 
 
 class StandingsView(str, Enum):
@@ -82,7 +83,9 @@ class StandingsMixin:
             "sortSports": "1",
         }
 
-        async with httpx.AsyncClient(timeout=30.0, verify=False) as client:
+        async with httpx.AsyncClient(
+            timeout=30.0, verify=get_ssl_context()
+        ) as client:
             response = await client.get(self._BDF_STANDINGS_URL, params=params)
             response.raise_for_status()
             return response.json()

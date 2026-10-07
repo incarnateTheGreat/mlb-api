@@ -15,7 +15,7 @@ import logging
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.config import get_settings
+from app.config import get_settings, is_production
 from app.database import init_db, close_db
 from app.middleware import CSRFMiddleware
 from app.routers import (
@@ -80,16 +80,23 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-# CORS configuration — allow your React Router frontend
-# In production, restrict origins to your actual domain
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=[
-        "http://localhost:3000",  # Production server
+# CORS configuration — allow your React Router frontend.
+# Credentials are sent cross-origin, so the origin list must stay an explicit
+# allowlist: "*" is invalid with allow_credentials=True and would be a hole.
+# The localhost entries exist for local development only and are dropped in
+# production, where a malicious app bound to a dev port could otherwise call
+# this API with the user's cookies attached.
+_cors_origins = [get_settings().frontend_url]
+if not is_production():
+    _cors_origins += [
+        "http://localhost:3000",
         "http://localhost:5173",  # Vite dev server (default)
         "http://localhost:5174",  # Vite dev server (alternate)
-        get_settings().frontend_url,  # Configured frontend URL
-    ],
+    ]
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=sorted(set(_cors_origins)),
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

@@ -54,8 +54,9 @@ source venv/bin/activate  # On Windows: venv\Scripts\activate
 # Install dependencies
 pip install -r requirements.txt
 
-# If you get SSL certificate errors (common with corporate VPNs), use:
-# pip install --trusted-host pypi.org --trusted-host files.pythonhosted.org -r requirements.txt
+# If you get SSL certificate errors (common with corporate VPNs), see
+# "SSL certificate errors" under Troubleshooting below. Do not use
+# --trusted-host; it disables verification instead of fixing trust.
 
 # Set up environment variables
 cp .env.example .env
@@ -73,7 +74,26 @@ uvicorn app.main:app --reload
 Your Python installation may have library conflicts. Use pyenv instead (see Prerequisites above).
 
 **SSL certificate errors during `pip install`**
-Add `--trusted-host pypi.org --trusted-host files.pythonhosted.org` to your pip command.
+
+This means a TLS-inspecting proxy (corporate VPN) is re-signing traffic with a
+root CA that your OS trusts but `certifi` — the bundle pip ships with — does not.
+
+Do **not** use `--trusted-host`. That flag turns verification off and exposes the
+install to package tampering. Instead, hand pip a bundle that includes your
+organisation's root:
+
+```bash
+# Export the roots your Mac already trusts, and append them to certifi's bundle
+security find-certificate -a -p /Library/Keychains/System.keychain > /tmp/a.pem
+security find-certificate -a -p \
+  /System/Library/Keychains/SystemRootCertificates.keychain > /tmp/b.pem
+cat "$(python -m certifi)" /tmp/a.pem /tmp/b.pem > /tmp/combined-ca.pem
+
+pip install --cert /tmp/combined-ca.pem -r requirements.txt
+```
+
+Application traffic needs no such workaround: the MLB client verifies against
+the OS trust store via `truststore`, so it already trusts the proxy root.
 
 **`uvicorn: command not found`**
 Make sure you've activated the virtual environment: `source venv/bin/activate`
