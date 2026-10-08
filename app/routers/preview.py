@@ -297,8 +297,14 @@ async def _fetch_trivia(
 
     Trivia is garnish, so an upstream failure here returns None rather than
     taking down the matchup table the caller actually asked for.
+
+    Leaders are two extra requests, one per club, so they go out alongside
+    the other two rather than after them. They are also the only part
+    allowed to fail on its own: standings and the series carry the facts
+    the panel is built around, while a missing leader board just means one
+    fewer line.
     """
-    standings, series = await asyncio.gather(
+    standings, series, away_leaders, home_leaders = await asyncio.gather(
         mlb_client._get(
             "/standings",
             params={
@@ -309,13 +315,22 @@ async def _fetch_trivia(
             },
         ),
         mlb_client.get_head_to_head_schedule(away_id, home_id, season),
+        mlb_client.get_team_leaders(away_id, season),
+        mlb_client.get_team_leaders(home_id, season),
         return_exceptions=True,
     )
 
     if not isinstance(standings, dict) or not isinstance(series, dict):
         return None
 
-    return build_trivia(standings, series, away_id, home_id)
+    return build_trivia(
+        standings,
+        series,
+        away_id,
+        home_id,
+        away_leaders=away_leaders if isinstance(away_leaders, list) else None,
+        home_leaders=home_leaders if isinstance(home_leaders, list) else None,
+    )
 
 
 @router.get("/{game_id}/preview")

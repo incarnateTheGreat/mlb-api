@@ -240,17 +240,136 @@ def summarize_season_series(
     }
 
 
+"""
+Which stat group actually answers each leader category.
+
+The leaders endpoint returns every category for every group it has, so a
+request for home runs comes back three times over: home runs hit, home
+runs allowed by a pitcher, and a catching figure. The category name alone
+does not say which is which — only `statGroup` does.
+
+Getting this wrong is not a rounding error. Without it the 2025 Yankees
+board reports Aaron Judge leading the club with 160 strikeouts, which is
+how often he struck out, and Austin Wells leading with 133 home runs.
+"""
+LEADER_GROUPS: dict[str, str] = {
+    "homeRuns": "hitting",
+    "battingAverage": "hitting",
+    "runsBattedIn": "hitting",
+    "strikeouts": "pitching",
+    "earnedRunAverage": "pitching",
+    "saves": "pitching",
+}
+
+# Shown in this order, so the first thing read is the club's best bat.
+LEADER_ORDER = (
+    "homeRuns",
+    "runsBattedIn",
+    "battingAverage",
+    "strikeouts",
+    "earnedRunAverage",
+    "saves",
+)
+
+LEADER_LABELS: dict[str, str] = {
+    "homeRuns": "HR",
+    "runsBattedIn": "RBI",
+    "battingAverage": "AVG",
+    "strikeouts": "K",
+    "earnedRunAverage": "ERA",
+    "saves": "SV",
+}
+
+
+def _top_leader(group: dict[str, Any]) -> Optional[dict[str, Any]]:
+    """
+    The leader in one category, or nothing when the club is tied.
+
+    Ties are dropped rather than picked between. "Sal Frelick leads the
+    club at .288" is wrong when Brice Turang also hit .288, and there is
+    no neutral way to choose — alphabetical or payload order would both
+    be inventing a result.
+    """
+    leaders = group.get("leaders") or []
+    ranked = [entry for entry in leaders if entry.get("rank") == 1]
+    if len(ranked) != 1:
+        return None
+
+    leader = ranked[0]
+    person = leader.get("person") or {}
+    name = person.get("fullName")
+    value = leader.get("value")
+    if not name or value is None:
+        return None
+
+    return {
+        "player_id": person.get("id"),
+        "name": name,
+        # Left as the string upstream sent. ".288" and "2.70" are already
+        # formatted the way the sport writes them, and parsing to a float
+        # would only mean reformatting it back and losing the leading zero
+        # convention in the process.
+        "value": str(value),
+    }
+
+
+def summarize_leaders(team_leaders: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """
+    Reduce a club's leader board to one name per category.
+
+    Only the top name in each: a pre-game note has room for who leads the
+    club, not for a top five.
+    """
+    by_category: dict[str, dict[str, Any]] = {}
+
+    for group in team_leaders or []:
+        category = group.get("leaderCategory")
+        if LEADER_GROUPS.get(category) != group.get("statGroup"):
+            continue
+        # First match wins — a category appears once per stat group, so
+        # having filtered on the group there should be only one.
+        if category in by_category:
+            continue
+
+        leader = _top_leader(group)
+        if leader:
+            by_category[category] = {
+                **leader,
+                "category": category,
+                "label": LEADER_LABELS[category],
+            }
+
+    return [
+        by_category[category]
+        for category in LEADER_ORDER
+        if category in by_category
+    ]
+
+
 def build_trivia(
     standings: dict[str, Any],
     series_schedule: dict[str, Any],
     away_id: int,
     home_id: int,
+    away_leaders: Optional[list[dict[str, Any]]] = None,
+    home_leaders: Optional[list[dict[str, Any]]] = None,
 ) -> dict[str, Any]:
-    """Assemble the trivia block from already-fetched upstream payloads."""
+    """
+    Assemble the trivia block from already-fetched upstream payloads.
+
+    Leaders are optional because they are a separate request per club. A
+    failure there drops the leader board and leaves the rest of the block
+    intact, rather than costing the standings and series too.
+    """
     teams: dict[str, Any] = {}
+    leaders_by_side = {"away": away_leaders, "home": home_leaders}
+
     for side, team_id in (("away", away_id), ("home", home_id)):
         team_record = find_team_record(standings, team_id)
-        teams[side] = summarize_team_record(team_record) if team_record else None
+        summary = summarize_team_record(team_record) if team_record else None
+        if summary is not None:
+            summary["leaders"] = summarize_leaders(leaders_by_side[side] or [])
+        teams[side] = summary
 
     return {
         "season_series": summarize_season_series(

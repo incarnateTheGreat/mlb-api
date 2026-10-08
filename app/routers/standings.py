@@ -187,6 +187,9 @@ async def get_standings(
     try:
         response = await mlb_client.get_standings(year, view)
 
+        # Before the view processors, not after: each of them reshapes the
+        # records into a different structure, so enriching here is the one
+        # place that reaches all four without being written four times.
         enrich_with_pythagorean(response)
 
         # Process based on view type

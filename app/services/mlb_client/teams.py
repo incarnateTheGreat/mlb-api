@@ -11,6 +11,7 @@ from app.services.memory_cache import (
     cached_league_rates,
     cached_team_info,
     cached_team_detail,
+    cached_team_leaders,
     cached_team_schedule,
     cached_team_roster,
     cached_team_coaches,
@@ -140,6 +141,13 @@ def get_team_slug_by_id(team_id: int) -> Optional[str]:
 
 class TeamsMixin:
     """Mixin providing team-related API methods."""
+
+    # The categories a pre-game note has room for. Kept here rather than
+    # taken from the caller so the cache key stays one per club per
+    # season — varying the categories per request would fragment it.
+    _DEFAULT_LEADER_CATEGORIES = (
+        "homeRuns,battingAverage,runsBattedIn,strikeouts,earnedRunAverage,saves"
+    )
 
     @cached_team_info
     async def get_team_info(
@@ -417,3 +425,42 @@ class TeamsMixin:
         """
         data = await self._get(f"/teams/{team_id}/coaches")
         return data.get("roster", [])
+
+    @cached_team_leaders
+    async def get_team_leaders(
+        self,
+        team_id: int,
+        season: int,
+        categories: Optional[str] = None,
+    ) -> list[dict[str, Any]]:
+        """
+        Fetch a club's statistical leaders.
+
+        Every category comes back for every stat group, whatever is asked
+        for — passing `statGroup` does not narrow it. So a request for home
+        runs returns the club leader in home runs *hit*, the leader in home
+        runs *allowed*, and a catching figure as well, all under the same
+        category name. Callers must read `statGroup` off each group to tell
+        them apart; see `summarize_leaders`.
+
+        Regular season only. Postseason totals are a handful of games and
+        would crown whoever happened to homer in a division series.
+
+        Args:
+            team_id: MLB team ID
+            season: Season year
+            categories: Comma-separated leaderCategories values, defaulting
+                to the set a pre-game note has room for
+
+        Returns:
+            The raw `teamLeaders` groups, each with its own statGroup.
+        """
+        data = await self._get(
+            f"/teams/{team_id}/leaders",
+            params={
+                "leaderCategories": categories or self._DEFAULT_LEADER_CATEGORIES,
+                "season": season,
+                "leaderGameTypes": "R",
+            },
+        )
+        return data.get("teamLeaders", [])

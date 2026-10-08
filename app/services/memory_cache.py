@@ -434,6 +434,29 @@ def cached_league_rates(func: Callable[..., T]) -> Callable[..., T]:
     return wrapper
 
 
+def cached_team_leaders(func: Callable[..., T]) -> Callable[..., T]:
+    """
+    Decorator to cache team leader boards.
+
+    Season totals, so they move once a day at most. Shares the 5-minute
+    team TTL rather than introducing a longer one of its own — the win is
+    collapsing the burst of requests a single page makes, not holding the
+    figures for hours.
+    """
+    @wraps(func)
+    async def wrapper(self, team_id: int, season: int, *args, **kwargs) -> T:
+        cache_key = f"team_leaders:{team_id}:{season}"
+
+        if cache_key in _teams_cache:
+            return _teams_cache[cache_key]
+
+        result = await func(self, team_id, season, *args, **kwargs)
+        _teams_cache[cache_key] = result
+        return result
+
+    return wrapper
+
+
 def cached_team_schedule(func: Callable[..., T]) -> Callable[..., T]:
     """
     Decorator to cache team schedule API calls.
