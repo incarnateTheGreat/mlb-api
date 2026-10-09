@@ -2,9 +2,7 @@
 Analysis router — general AI-powered analysis endpoints.
 """
 
-from typing import Optional
-
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from app.services.ai_service import get_ai_service, AIService

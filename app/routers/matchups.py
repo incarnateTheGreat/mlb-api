@@ -7,7 +7,6 @@ from typing import Any, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 
-from app.models.analysis import MatchupAnalysis
 from app.services.mlb_client import get_mlb_client, MLBStatsClient
 from app.services.ai_service import get_ai_service, AIService
 from app.services.matchup_context import (

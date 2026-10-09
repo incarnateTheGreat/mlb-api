@@ -152,7 +152,6 @@ def get_date_range_for_month(year: int, month: Optional[str] = None) -> dict[str
     Returns:
         Dict with "startDate" and "endDate" in ISO format
     """
-    from datetime import date
     from calendar import monthrange
     
     if month is None or month == "All":

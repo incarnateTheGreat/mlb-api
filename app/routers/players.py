@@ -6,7 +6,7 @@ from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 
-from app.models.player import PlayerBio, PlayerProfile, AdvancedBattingStats, BattingStats, GameLogsResponse
+from app.models.player import PlayerBio, BattingStats, GameLogsResponse
 from app.services.mlb_client import get_mlb_client, MLBStatsClient
 from app.services.ai_service import get_ai_service, AIService
 from app.services.sabermetrics import enhance_batting_stats

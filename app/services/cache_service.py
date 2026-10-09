@@ -9,7 +9,6 @@ The cache uses SQLAlchemy + Postgres JSONB for flexible storage.
 TTL is handled via expiration timestamps and periodic cleanup.
 """
 
-import json
 from datetime import datetime, timedelta
 from typing import Optional, TypeVar, Type
 
@@ -206,7 +205,6 @@ async def get_cached_game_summary(
     game_id: int,
 ) -> Optional[dict]:
     """Get a cached game summary."""
-    cache = CacheService(db)
     # Using dict here instead of GameSummary to avoid circular imports
     # The router will validate with Pydantic
     stmt = select(CachedResponse).where(
