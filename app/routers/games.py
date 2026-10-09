@@ -19,8 +19,6 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
-from app.models.game import GameBoxscore, GameSummary, GameSummaryRequest
-from app.models.analysis import AIGenerationMetadata
 from app.services.mlb_client import get_mlb_client, MLBStatsClient
 from app.services.ai_service import get_ai_service, AIService
 from app.services.cache_service import (
@@ -32,7 +30,7 @@ from app.services.memory_cache import (
     get_cached_game_feed_bytes,
     cache_game_feed_bytes,
 )
-from app.models.game import GameBoxscore, GameSummary, GameSummaryRequest, GameContent
+from app.models.game import GameBoxscore, GameSummary, GameContent
 from app.utils import process_schedule_response
 
 router = APIRouter()

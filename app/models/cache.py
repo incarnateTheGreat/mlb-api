@@ -11,7 +11,6 @@ more explicit control. Key differences from Prisma:
 """
 
 from datetime import datetime
-from typing import Optional
 
 from sqlalchemy import Column, Integer, String, DateTime, Text, Index
 from sqlalchemy.dialects.postgresql import JSONB

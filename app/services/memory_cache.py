@@ -80,7 +80,10 @@ def _make_cache_key(*args, **kwargs) -> str:
     """Create a stable cache key from function arguments."""
     # Combine args and kwargs into a hashable string
     key_data = json.dumps({"args": args, "kwargs": kwargs}, sort_keys=True, default=str)
-    return hashlib.md5(key_data.encode()).hexdigest()
+    # MD5 is used purely to shorten a cache key, never to protect anything.
+    # usedforsecurity=False documents that intent and keeps this working on
+    # FIPS-restricted builds, where the plain constructor raises.
+    return hashlib.md5(key_data.encode(), usedforsecurity=False).hexdigest()
 
 
 def cached_game_feed(func: Callable[..., T]) -> Callable[..., T]:
@@ -256,6 +259,48 @@ def cached_player_stats(func: Callable[..., T]) -> Callable[..., T]:
     return wrapper
 
 
+def cached_batter_vs_pitcher(func: Callable[..., T]) -> Callable[..., T]:
+    """
+    Decorator to cache career batter-vs-pitcher splits.
+
+    Career head-to-head totals only move when the two players actually
+    face each other, so the 10-minute player TTL is generous here.
+    """
+    @wraps(func)
+    async def wrapper(self, batter_id: int, pitcher_id: int, *args, **kwargs) -> T:
+        cache_key = f"h2h:{batter_id}:{pitcher_id}"
+
+        if cache_key in _player_cache:
+            return _player_cache[cache_key]
+
+        result = await func(self, batter_id, pitcher_id, *args, **kwargs)
+        _player_cache[cache_key] = result
+        return result
+
+    return wrapper
+
+
+def cached_platoon_splits(func: Callable[..., T]) -> Callable[..., T]:
+    """
+    Decorator to cache vs-LHP/vs-RHP platoon splits.
+
+    Season-long splits barely move game to game, so these share the
+    10-minute player cache.
+    """
+    @wraps(func)
+    async def wrapper(self, player_id: int, season: int, group: str = "hitting", *args, **kwargs) -> T:
+        cache_key = f"platoon:{player_id}:{season}:{group}"
+
+        if cache_key in _player_cache:
+            return _player_cache[cache_key]
+
+        result = await func(self, player_id, season, group, *args, **kwargs)
+        _player_cache[cache_key] = result
+        return result
+
+    return wrapper
+
+
 def cached_player_profile(func: Callable[..., T]) -> Callable[..., T]:
     """
     Decorator to cache player profile API calls.
@@ -365,6 +410,50 @@ def cached_team_detail(func: Callable[..., T]) -> Callable[..., T]:
         _teams_cache[cache_key] = result
         return result
     
+    return wrapper
+
+
+def cached_league_rates(func: Callable[..., T]) -> Callable[..., T]:
+    """
+    Decorator to cache league-wide batting rates.
+
+    These are aggregated from all 30 clubs, so they move by ten-thousandths
+    over a full day. Sharing the 5-minute team TTL is conservative.
+    """
+    @wraps(func)
+    async def wrapper(self, season: int, *args, **kwargs) -> T:
+        cache_key = f"league_rates:{season}"
+
+        if cache_key in _teams_cache:
+            return _teams_cache[cache_key]
+
+        result = await func(self, season, *args, **kwargs)
+        _teams_cache[cache_key] = result
+        return result
+
+    return wrapper
+
+
+def cached_team_leaders(func: Callable[..., T]) -> Callable[..., T]:
+    """
+    Decorator to cache team leader boards.
+
+    Season totals, so they move once a day at most. Shares the 5-minute
+    team TTL rather than introducing a longer one of its own — the win is
+    collapsing the burst of requests a single page makes, not holding the
+    figures for hours.
+    """
+    @wraps(func)
+    async def wrapper(self, team_id: int, season: int, *args, **kwargs) -> T:
+        cache_key = f"team_leaders:{team_id}:{season}"
+
+        if cache_key in _teams_cache:
+            return _teams_cache[cache_key]
+
+        result = await func(self, team_id, season, *args, **kwargs)
+        _teams_cache[cache_key] = result
+        return result
+
     return wrapper
 
 

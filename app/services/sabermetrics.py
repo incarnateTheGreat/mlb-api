@@ -10,7 +10,7 @@ broadcast operations built-in. Instead of array.map(), you do
 direct operations on the array: `arr * 2` multiplies every element.
 """
 
-from typing import Optional
+from typing import Any, Optional
 import numpy as np
 
 from app.models.player import (
@@ -155,6 +155,55 @@ def calculate_iso(slg: float, avg: float) -> float:
     League average is around .140-.150.
     """
     return round(slg - avg, 3)
+
+
+# Bill James' refined exponent for baseball. The original formula squared
+# the run totals, hence "Pythagorean"; 1.83 fits a century of results more
+# closely and is what the term now means in practice.
+PYTHAGOREAN_EXPONENT = 1.83
+
+
+def calculate_pythagorean_record(
+    runs_scored: int,
+    runs_allowed: int,
+    wins: int,
+    losses: int,
+) -> Optional[dict[str, Any]]:
+    """
+    Work out the record a club's run totals deserve.
+
+    Outscoring the opposition wins games; doing it by eight runs instead
+    of two does not win extra ones. Pythagorean expectation prices that
+    in, so a club that keeps winning one-run games or losing blowouts ends
+    up some way clear of — or behind — what its runs suggest.
+
+    That gap is the part worth showing, so it comes back as `luck`:
+    positive means more wins than the runs account for. It is not a
+    judgement about quality, only about where the runs landed.
+
+    Returns None when the inputs cannot describe a season — no games
+    played, or no runs on either side.
+    """
+    games = wins + losses
+    if games <= 0 or runs_scored < 0 or runs_allowed < 0:
+        return None
+    if runs_scored == 0 and runs_allowed == 0:
+        return None
+
+    scored = runs_scored**PYTHAGOREAN_EXPONENT
+    allowed = runs_allowed**PYTHAGOREAN_EXPONENT
+    pct = scored / (scored + allowed)
+
+    expected_wins = round(pct * games)
+    expected_losses = games - expected_wins
+
+    return {
+        "pct": round(pct, 3),
+        "wins": expected_wins,
+        "losses": expected_losses,
+        "record": f"{expected_wins}-{expected_losses}",
+        "luck": wins - expected_wins,
+    }
 
 
 def calculate_babip(

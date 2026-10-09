@@ -5,11 +5,38 @@ This module contains the core HTTP client setup and shared methods
 that all domain-specific mixins inherit from.
 """
 
+import ssl
+from functools import lru_cache
 from typing import Any, Optional
 
 import httpx
+import truststore
 
 from app.config import get_settings
+
+
+@lru_cache(maxsize=1)
+def get_ssl_context() -> ssl.SSLContext:
+    """
+    Build the shared TLS context used for every outbound MLB request.
+
+    Certificates are verified against the *operating system* trust store
+    rather than certifi's bundled list. That distinction matters in two
+    places at once:
+
+    - Behind a TLS-inspecting corporate proxy, the proxy's root CA is
+      installed in the OS keychain but is absent from certifi, so certifi
+      rejects every connection. That failure is the reason this client
+      previously ran with ``verify=False``, which silently disabled
+      certificate checking and left traffic open to interception.
+    - In production (Railway), the OS store holds the ordinary public CAs,
+      so normal verification applies with no special-casing.
+
+    Either way verification stays ON. Building the context is expensive
+    (it reads and parses the whole system store), so it is cached and
+    shared across all clients.
+    """
+    return truststore.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
 
 
 class BaseMLBClient:
@@ -40,7 +67,7 @@ class BaseMLBClient:
                 base_url=self.base_url,
                 timeout=30.0,
                 headers={"User-Agent": self.USER_AGENT},
-                verify=False,
+                verify=get_ssl_context(),
             )
         return self._client_v1
     
@@ -51,7 +78,7 @@ class BaseMLBClient:
                 base_url=self.live_url,
                 timeout=30.0,
                 headers={"User-Agent": self.USER_AGENT},
-                verify=False,
+                verify=get_ssl_context(),
             )
         return self._client_live
     
@@ -65,7 +92,7 @@ class BaseMLBClient:
                     "User-Agent": self.USER_AGENT,
                     "Apollo-Require-Preflight": "true",
                 },
-                verify=False,
+                verify=get_ssl_context(),
             )
         return self._client_graphql
     

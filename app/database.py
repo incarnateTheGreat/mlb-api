@@ -7,7 +7,6 @@ we create a single engine and session factory, then inject sessions
 into route handlers via FastAPI's dependency injection.
 """
 
-from contextlib import asynccontextmanager
 from typing import AsyncGenerator
 
 from sqlalchemy import text

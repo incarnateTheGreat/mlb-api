@@ -8,9 +8,48 @@ from datetime import date
 from fastapi import APIRouter, Depends, Query
 
 from app.services.mlb_client import get_mlb_client, MLBStatsClient, StandingsView
+from app.services.sabermetrics import calculate_pythagorean_record
 
 
 router = APIRouter()
+
+
+def _as_int(value: Any) -> Optional[int]:
+    """Standings mixes ints and numeric strings depending on the field."""
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def enrich_with_pythagorean(response: dict) -> None:
+    """
+    Attach an expected record to every club in the payload.
+
+    Done on the raw records rather than per view: all four views reshape
+    the same team-record dicts, so enriching here once reaches every one
+    of them without the processors having to know about it.
+
+    A record missing either run total leaves the field null rather than
+    raising. Nothing in the live feed does that today — spring training
+    carries run totals too — but this runs over a payload we do not own.
+
+    Mutates the response in place. The upstream payload is cached, so this
+    can run against the same dict repeatedly — it is idempotent, and a
+    deep copy of a league-wide standings response to avoid that would cost
+    more than the calculation does.
+    """
+    for record in response.get("records", []):
+        for team_record in record.get("teamRecords", []):
+            fields = [
+                _as_int(team_record.get(key))
+                for key in ("runsScored", "runsAllowed", "wins", "losses")
+            ]
+            team_record["pythagorean"] = (
+                calculate_pythagorean_record(*fields)
+                if all(field is not None for field in fields)
+                else None
+            )
 
 
 def process_division_standings(response: dict) -> dict[str, Any]:
@@ -147,7 +186,12 @@ async def get_standings(
     
     try:
         response = await mlb_client.get_standings(year, view)
-        
+
+        # Before the view processors, not after: each of them reshapes the
+        # records into a different structure, so enriching here is the one
+        # place that reaches all four without being written four times.
+        enrich_with_pythagorean(response)
+
         # Process based on view type
         if view == StandingsView.DIVISION:
             standings_data = process_division_standings(response)

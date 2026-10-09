@@ -13,6 +13,8 @@ from app.services.memory_cache import (
     cached_player_stats,
     cached_player_profile,
     cached_player_gamelogs,
+    cached_batter_vs_pitcher,
+    cached_platoon_splits,
 )
 
 class PlayersMixin:
@@ -83,6 +85,77 @@ class PlayersMixin:
             return {}
         
         return splits[0].get("stat", {})
+
+    @cached_batter_vs_pitcher
+    async def get_batter_vs_pitcher(
+        self,
+        batter_id: int,
+        pitcher_id: int,
+    ) -> dict[str, Any]:
+        """
+        Fetch career head-to-head totals for a batter against a pitcher.
+
+        Uses the `vsPlayerTotal` stat type, which accumulates every
+        plate appearance between the two players across all seasons.
+
+        Returns an empty dict when they have never faced each other.
+        """
+        params = {
+            "stats": "vsPlayerTotal",
+            "group": "hitting",
+            "opposingPlayerId": pitcher_id,
+            "sportId": 1,
+        }
+
+        data = await self._get(f"/people/{batter_id}/stats", params=params)
+
+        # The response carries several split blocks; the career totals are
+        # the one that actually reports accumulated at-bats.
+        for block in data.get("stats", []):
+            for split in block.get("splits", []):
+                stat = split.get("stat", {})
+                if stat.get("atBats") is not None:
+                    return stat
+
+        return {}
+
+    @cached_platoon_splits
+    async def get_platoon_splits(
+        self,
+        player_id: int,
+        season: int,
+        group: str = "hitting",
+    ) -> dict[str, dict[str, Any]]:
+        """
+        Fetch vs-LHP/vs-RHP splits for a batter, or vs-LHB/vs-RHB for a pitcher.
+
+        Args:
+            player_id: MLB player ID
+            season: Year (e.g., 2026)
+            group: "hitting" or "pitching"
+
+        Returns a dict keyed by split code: {"vl": {...}, "vr": {...}}.
+        For hitters `vl` means "versus left-handed pitching"; for pitchers
+        it means "versus left-handed batters".
+        """
+        params = {
+            "stats": "statSplits",
+            "sitCodes": "vl,vr",
+            "group": group,
+            "season": season,
+            "sportId": 1,
+        }
+
+        data = await self._get(f"/people/{player_id}/stats", params=params)
+
+        splits: dict[str, dict[str, Any]] = {}
+        for block in data.get("stats", []):
+            for split in block.get("splits", []):
+                code = split.get("split", {}).get("code")
+                if code in ("vl", "vr"):
+                    splits[code] = split.get("stat", {})
+
+        return splits
 
     @cached_player_profile
     async def get_player_profile(self, player_id: int) -> dict[str, Any]:
