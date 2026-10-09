@@ -17,6 +17,10 @@ from app.services.memory_cache import (
     cached_platoon_splits,
 )
 
+#: MLB StatsAPI award id carried by Hall of Fame inductees.
+HALL_OF_FAME_AWARD_ID = "MLBHOF"
+
+
 class PlayersMixin:
     """Mixin providing player-related API methods."""
     
@@ -167,16 +171,35 @@ class PlayersMixin:
         - team info  
         - year-by-year hitting and pitching stats
         - career regular season totals
+        - hallOfFame induction (derived from the awards hydration)
         """
         params = {
-            "hydrate": "currentTeam,team,stats(group=[hitting,pitching],type=[yearByYear,careerRegularSeason],team(league),leagueListId=mlb_hist)",
+            "hydrate": "currentTeam,team,awards,stats(group=[hitting,pitching],type=[yearByYear,careerRegularSeason],team(league),leagueListId=mlb_hist)",
             "site": "en",
         }
         
         data = await self._get(f"/people/{player_id}", params=params)
         people = data.get("people", [])
         
-        return people[0] if people else {}
+        if not people:
+            return {}
+
+        person = people[0]
+
+        # The awards hydration is the only source of HOF status, but the full
+        # list runs ~18KB for a decorated player. Reduce it to the one fact we
+        # need and drop the rest before it reaches the client.
+        awards = person.pop("awards", [])
+        induction = next(
+            (a for a in awards if a.get("id") == HALL_OF_FAME_AWARD_ID), None
+        )
+        person["hallOfFame"] = (
+            {"season": induction.get("season"), "date": induction.get("date")}
+            if induction
+            else None
+        )
+
+        return person
 
     @cached_player_gamelogs
     async def get_player_gamelogs(
