@@ -12,6 +12,7 @@ Validates that the new notification format includes:
 from unittest.mock import AsyncMock, Mock, patch
 
 import logging
+import sys
 
 import pytest
 
@@ -839,6 +840,67 @@ class TestUndeliveredPlayIsVisible:
 
         assert "never delivered" in caplog.text
         assert "69" in caplog.text
+
+
+class TestLogStreamRouting:
+    """Routine records and problems must land on different streams.
+
+    Railway derives a log's severity from the stream it arrived on, so
+    emitting everything to stderr tagged every delivery record "error" and
+    buried the undelivered-play ERROR those records exist to surface.
+    """
+
+    def setup_method(self):
+        self._app_logger = logging.getLogger("app")
+        self._saved = list(self._app_logger.handlers)
+
+        self._app_logger.handlers.clear()
+
+    def teardown_method(self):
+        self._app_logger.handlers.clear()
+        self._app_logger.handlers.extend(self._saved)
+
+    def _streams(self):
+        from app.main import _configure_logging
+
+        _configure_logging()
+
+        # Compared by identity: pytest swaps sys.stdout/sys.stderr for capture
+        # objects, so the stream's `name` is not reliable here.
+        return {
+            id(handler.stream): handler
+            for handler in logging.getLogger("app").handlers
+        }
+
+    def test_info_goes_to_stdout_and_warnings_to_stderr(self):
+        streams = self._streams()
+
+        assert id(sys.stdout) in streams
+        assert id(sys.stderr) in streams
+
+        info = logging.LogRecord("app.x", logging.INFO, "f", 1, "m", None, None)
+        error = logging.LogRecord("app.x", logging.ERROR, "f", 1, "m", None, None)
+
+        stdout = streams[id(sys.stdout)]
+        stderr = streams[id(sys.stderr)]
+
+        # Routine delivery records: stdout only.
+        # `Handler.filter` returns the record itself when it passes, so this
+        # is a truthiness check rather than an identity one.
+        assert stdout.filter(info)
+        assert stderr.level > logging.INFO
+
+        # Problems: stderr only, so the severity Railway reports is accurate.
+        assert not stdout.filter(error)
+        assert error.levelno >= stderr.level
+
+    def test_reentering_lifespan_does_not_stack_handlers(self):
+        from app.main import _configure_logging
+
+        _configure_logging()
+        _configure_logging()
+
+        assert len(logging.getLogger("app").handlers) == 2
 
 
 class TestClassifyDevice:

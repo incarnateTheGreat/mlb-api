@@ -11,6 +11,7 @@ from typing import AsyncGenerator
 
 import asyncio
 import logging
+import sys
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -49,6 +50,11 @@ def _configure_logging() -> None:
     Deliberately scoped to the `app` namespace rather than the root logger:
     SQLAlchemy attaches its own handler when `echo` is on, so configuring the
     root would print every statement twice.
+
+    Records are split across stdout and stderr by level because Railway
+    derives a log's severity from the stream it arrived on. Sending INFO to
+    stderr tagged routine delivery records as "error", which is exactly what
+    makes the undelivered-play ERROR impossible to pick out of the noise.
     """
     settings = get_settings()
     level = getattr(logging, settings.log_level.upper(), logging.INFO)
@@ -57,16 +63,24 @@ def _configure_logging() -> None:
 
     # Re-entering the lifespan must not stack handlers and duplicate output.
     if not app_logger.handlers:
-        handler = logging.StreamHandler()
-        handler.setFormatter(
-            logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s")
+        formatter = logging.Formatter(
+            "%(asctime)s %(levelname)s %(name)s: %(message)s"
         )
 
-        app_logger.addHandler(handler)
+        routine = logging.StreamHandler(sys.stdout)
+        routine.setFormatter(formatter)
+        routine.addFilter(lambda record: record.levelno < logging.WARNING)
+
+        problems = logging.StreamHandler(sys.stderr)
+        problems.setFormatter(formatter)
+        problems.setLevel(logging.WARNING)
+
+        app_logger.addHandler(routine)
+        app_logger.addHandler(problems)
 
     app_logger.setLevel(level)
 
-    # The handler above is the one that emits; propagating as well would
+    # The handlers above are the ones that emit; propagating as well would
     # duplicate records through any root handler.
     app_logger.propagate = False
 
