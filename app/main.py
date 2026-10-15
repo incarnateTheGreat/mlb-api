@@ -36,6 +36,41 @@ from app.services.scoring_watcher import run_scoring_watcher
 logger = logging.getLogger(__name__)
 
 
+def _configure_logging() -> None:
+    """Make the app's own log records visible.
+
+    uvicorn configures only the "uvicorn*" loggers and leaves the root logger
+    alone, so records from `app.*` fall through to `logging.lastResort`, which
+    drops anything below WARNING. Every logger.info() in the app - including
+    the scoring watcher's record of which pushes were delivered - was being
+    discarded in production, which is what made a missed notification
+    impossible to diagnose after the fact.
+
+    Deliberately scoped to the `app` namespace rather than the root logger:
+    SQLAlchemy attaches its own handler when `echo` is on, so configuring the
+    root would print every statement twice.
+    """
+    settings = get_settings()
+    level = getattr(logging, settings.log_level.upper(), logging.INFO)
+
+    app_logger = logging.getLogger("app")
+
+    # Re-entering the lifespan must not stack handlers and duplicate output.
+    if not app_logger.handlers:
+        handler = logging.StreamHandler()
+        handler.setFormatter(
+            logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s")
+        )
+
+        app_logger.addHandler(handler)
+
+    app_logger.setLevel(level)
+
+    # The handler above is the one that emits; propagating as well would
+    # duplicate records through any root handler.
+    app_logger.propagate = False
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     """
@@ -46,6 +81,8 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     Code before `yield` runs on startup, code after runs on shutdown.
     """
     # Startup
+    _configure_logging()
+
     await init_db()
 
     # The scoring play watcher polls MLB on the server's own schedule so push

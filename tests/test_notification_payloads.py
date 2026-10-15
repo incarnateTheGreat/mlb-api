@@ -11,6 +11,8 @@ Validates that the new notification format includes:
 
 from unittest.mock import AsyncMock, Mock, patch
 
+import logging
+
 import pytest
 
 from app.routers.notifications import classify_device
@@ -504,9 +506,343 @@ class TestIntegrationNotificationFormat:
             assert any(suffix in payload["body"] for suffix in ["st", "nd", "rd", "th"])
 
 
+def _wild_pitch_play(at_bat_index: int = 60, complete: bool = False) -> dict:
+    """A real shape: the run scores on a wild pitch, the at-bat ends in a K.
+
+    Taken from game 849811, where this produced the notification
+    "MIL scores!" / "Christian Yelich strikes out swinging."
+    """
+    return {
+        "atBatIndex": at_bat_index,
+        "about": {
+            "inning": 8,
+            "isTopInning": True,
+            # False even once complete: the plate appearance was not the
+            # scoring event.
+            "isScoringPlay": False,
+            "isComplete": complete,
+        },
+        "result": {
+            "awayScore": 5,
+            "homeScore": 2,
+            # Absent while the at-bat is still in progress.
+            **(
+                {"description": "Christian Yelich strikes out swinging."}
+                if complete
+                else {}
+            ),
+        },
+        "runners": [
+            {
+                "movement": {"start": "3B", "end": "score"},
+                "details": {"event": "Wild Pitch", "isScoringEvent": True},
+            }
+        ],
+        "playEvents": [
+            {"details": {"event": "Mound Visit", "isScoringPlay": False}},
+            {
+                "details": {
+                    "isScoringPlay": True,
+                    "description": (
+                        "Wild pitch by pitcher Justin Wrobleski. "
+                        "Brice Turang scores. William Contreras to 2nd."
+                    ),
+                }
+            },
+        ],
+    }
+
+
+def _live_feed(plays: list[dict], scoring_plays: list[int]) -> dict:
+    """A minimal in-progress feed wrapping the given plays."""
+    return {
+        "gameData": {
+            "status": {"abstractGameState": "Live", "codedGameState": "I"},
+            "teams": {
+                "away": {"abbreviation": "MIL", "id": 158},
+                "home": {"abbreviation": "LAD", "id": 119},
+            },
+        },
+        "liveData": {
+            "plays": {
+                "allPlays": plays,
+                "scoringPlays": scoring_plays,
+                "currentPlay": plays[-1] if plays else {},
+            }
+        },
+    }
+
+
+def _live_subscription(cursor: int, game_pk: int = 1):
+    return Mock(
+        endpoint="https://push.example/abc",
+        p256dh="p",
+        auth="a",
+        game_pk=game_pk,
+        last_at_bat_index=cursor,
+    )
+
+
+class TestRunScoredDetection:
+    """A run is a run however it got there."""
+
+    def test_wild_pitch_run_is_detected_before_the_at_bat_ends(self):
+        assert scoring_watcher._has_run_scored(_wild_pitch_play()) is True
+
+    def test_at_bat_with_no_runner_reaching_home_is_not_scoring(self):
+        play = {
+            "runners": [
+                {"movement": {"start": "1B", "end": "2B"}, "details": {}},
+                {"movement": {"start": None, "end": "1B"}, "details": {}},
+            ]
+        }
+
+        assert scoring_watcher._has_run_scored(play) is False
+
+    def test_play_without_runners_is_not_scoring(self):
+        assert scoring_watcher._has_run_scored({}) is False
+
+
+class TestScoringDescription:
+    """The body must narrate the RUN, not merely the plate appearance."""
+
+    def test_wild_pitch_run_is_described_by_its_play_event(self):
+        description = scoring_watcher._scoring_description(_wild_pitch_play())
+
+        assert "Wild pitch" in description
+        assert "Brice Turang scores" in description
+
+    def test_completed_strikeout_still_describes_the_run(self):
+        """The regression: once complete, `result.description` is a strikeout."""
+        play = _wild_pitch_play(complete=True)
+
+        description = scoring_watcher._scoring_description(play)
+
+        assert "strikes out" not in description
+        assert "Brice Turang scores" in description
+
+    def test_batter_driven_run_uses_the_at_bat_description(self):
+        play = {
+            "about": {"isScoringPlay": True},
+            "result": {"description": "Garrett Mitchell homers (1)."},
+            "playEvents": [],
+        }
+
+        assert (
+            scoring_watcher._scoring_description(play)
+            == "Garrett Mitchell homers (1)."
+        )
+
+    def test_latest_scoring_event_wins_when_several_runs_score(self):
+        play = {
+            "about": {"isScoringPlay": False},
+            "result": {},
+            "playEvents": [
+                {"details": {"isScoringPlay": True, "description": "First run."}},
+                {"details": {"isScoringPlay": True, "description": "Second run."}},
+            ],
+        }
+
+        assert scoring_watcher._scoring_description(play) == "Second run."
+
+    def test_falls_back_rather_than_announcing_nothing(self):
+        assert scoring_watcher._scoring_description({}) == "Run scored"
+
+
+class TestInFlightScoringPlay:
+    """A run must be announced when it scores, not when the at-bat ends.
+
+    `scoringPlays` is keyed by completed at-bat, so relying on it alone left
+    a measured 46s silence after a wild pitch - long enough for a subscriber
+    to see the run on TV and conclude notifications were broken.
+    """
+
+    async def test_run_is_announced_while_the_at_bat_is_still_in_progress(self):
+        play = _wild_pitch_play(complete=False)
+        feed = _live_feed([play], scoring_plays=[])
+        subscription = _live_subscription(cursor=50)
+
+        db = AsyncMock()
+        db.scalars = AsyncMock(return_value=[subscription])
+
+        with patch.object(
+            scoring_watcher,
+            "get_mlb_client",
+            return_value=Mock(get_game_feed_raw=AsyncMock(return_value=feed)),
+        ):
+            with patch.object(
+                scoring_watcher.push_service,
+                "send_push",
+                AsyncMock(return_value="sent"),
+            ) as send:
+                await scoring_watcher._process_game(db, 1)
+
+        assert send.await_count == 1
+        assert "Wild pitch" in send.await_args.kwargs["payload"]["body"]
+        # Cursor moves so the same run is not repeated when the at-bat lands
+        # in `scoringPlays` moments later.
+        assert subscription.last_at_bat_index == 60
+
+    async def test_completed_at_bat_is_not_announced_twice(self):
+        play = _wild_pitch_play(complete=True)
+        feed = _live_feed([play], scoring_plays=[60])
+        # Cursor already advanced by the in-flight announcement above.
+        subscription = _live_subscription(cursor=60)
+
+        db = AsyncMock()
+        db.scalars = AsyncMock(return_value=[subscription])
+
+        with patch.object(
+            scoring_watcher,
+            "get_mlb_client",
+            return_value=Mock(get_game_feed_raw=AsyncMock(return_value=feed)),
+        ):
+            with patch.object(
+                scoring_watcher.push_service,
+                "send_push",
+                AsyncMock(return_value="sent"),
+            ) as send:
+                await scoring_watcher._process_game(db, 1)
+
+        assert send.await_count == 0
+
+    async def test_in_progress_at_bat_without_a_run_is_ignored(self):
+        play = {
+            "atBatIndex": 61,
+            "about": {"inning": 8, "isTopInning": True, "isComplete": False},
+            "result": {"awayScore": 5, "homeScore": 2},
+            "runners": [{"movement": {"start": None, "end": "1B"}, "details": {}}],
+            "playEvents": [],
+        }
+        feed = _live_feed([play], scoring_plays=[])
+        subscription = _live_subscription(cursor=60)
+
+        db = AsyncMock()
+        db.scalars = AsyncMock(return_value=[subscription])
+
+        with patch.object(
+            scoring_watcher,
+            "get_mlb_client",
+            return_value=Mock(get_game_feed_raw=AsyncMock(return_value=feed)),
+        ):
+            with patch.object(
+                scoring_watcher.push_service,
+                "send_push",
+                AsyncMock(return_value="sent"),
+            ) as send:
+                await scoring_watcher._process_game(db, 1)
+
+        assert send.await_count == 0
+        assert subscription.last_at_bat_index == 60
+
+
+class TestUndeliveredPlayIsVisible:
+    """A missed scoring alert must leave a trace.
+
+    When a game ends, `_handle_final` deletes every subscription row - and
+    with it the cursor, which is the only record of what was delivered. A
+    scoring play still pending at that moment is discarded with no retry, so
+    without a log there is no way to tell afterwards whether a push was never
+    sent or simply never displayed.
+    """
+
+    async def test_failed_send_is_logged_with_the_play_index(self, caplog):
+        play = {
+            "atBatIndex": 69,
+            "about": {"inning": 9, "isTopInning": True, "isScoringPlay": True},
+            "result": {
+                "description": "Joey Ortiz singles. Cooper Pratt scores.",
+                "awayScore": 6,
+                "homeScore": 2,
+            },
+            "runners": [{"movement": {"end": "score"}, "details": {}}],
+        }
+        subscription = _live_subscription(cursor=60)
+
+        db = AsyncMock()
+
+        with caplog.at_level(logging.WARNING, logger="app.services.scoring_watcher"):
+            with patch.object(
+                scoring_watcher.push_service,
+                "send_push",
+                AsyncMock(return_value="failed"),
+            ):
+                await scoring_watcher._notify_subscriber(
+                    db, subscription, {69: play}, [69], "MIL", "LAD"
+                )
+
+        assert "69" in caplog.text
+        # The cursor must not advance past an undelivered play.
+        assert subscription.last_at_bat_index == 60
+
+    async def test_successful_send_is_logged(self, caplog):
+        play = {
+            "atBatIndex": 69,
+            "about": {"inning": 9, "isTopInning": True, "isScoringPlay": True},
+            "result": {"description": "Ortiz singles.", "awayScore": 6, "homeScore": 2},
+            "runners": [{"movement": {"end": "score"}, "details": {}}],
+        }
+        subscription = _live_subscription(cursor=60)
+
+        db = AsyncMock()
+
+        with caplog.at_level(logging.INFO, logger="app.services.scoring_watcher"):
+            with patch.object(
+                scoring_watcher.push_service,
+                "send_push",
+                AsyncMock(return_value="sent"),
+            ):
+                await scoring_watcher._notify_subscriber(
+                    db, subscription, {69: play}, [69], "MIL", "LAD"
+                )
+
+        assert "sent" in caplog.text
+        assert "69" in caplog.text
+        assert subscription.last_at_bat_index == 69
+
+    async def test_game_ending_with_an_undelivered_play_is_an_error(self, caplog):
+        """The exact shape of the 6-2 Final arriving without the 6-2 run."""
+        play = {
+            "atBatIndex": 69,
+            "about": {"inning": 9, "isTopInning": True, "isScoringPlay": True},
+            "result": {"description": "Ortiz singles.", "awayScore": 6, "homeScore": 2},
+            "runners": [{"movement": {"end": "score"}, "details": {}}],
+        }
+        feed = _live_feed([play], scoring_plays=[69])
+        feed["gameData"]["status"] = {
+            "abstractGameState": "Final",
+            "codedGameState": "O",
+            "detailedState": "Game Over",
+        }
+        feed["liveData"]["linescore"] = {
+            "teams": {"away": {"runs": 6}, "home": {"runs": 2}}
+        }
+
+        # Behind the final play: the scoring alert never got through.
+        subscription = _live_subscription(cursor=60)
+
+        db = AsyncMock()
+        db.scalars = AsyncMock(return_value=[subscription])
+
+        with caplog.at_level(logging.ERROR, logger="app.services.scoring_watcher"):
+            with patch.object(
+                scoring_watcher,
+                "get_mlb_client",
+                return_value=Mock(get_game_feed_raw=AsyncMock(return_value=feed)),
+            ):
+                with patch.object(
+                    scoring_watcher.push_service,
+                    "send_push",
+                    AsyncMock(side_effect=["failed", "sent"]),
+                ):
+                    await scoring_watcher._process_game(db, 1)
+
+        assert "never delivered" in caplog.text
+        assert "69" in caplog.text
+
+
 class TestClassifyDevice:
     """Test device classification from Client Hints and User-Agent."""
-
     def test_client_hint_mobile(self):
         """Sec-CH-UA-Mobile: ?1 means mobile, regardless of User-Agent."""
         desktop_ua = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)"

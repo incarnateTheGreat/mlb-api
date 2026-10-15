@@ -49,6 +49,11 @@ class Settings(BaseSettings):
     watcher_enabled: bool = True
     watcher_poll_seconds: int = 10
     
+    # Logging. uvicorn configures only its own loggers, leaving the root
+    # logger at WARNING - which silently discards every logger.info() in the
+    # app, including the watcher's push delivery records.
+    log_level: str = "INFO"
+    
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",
