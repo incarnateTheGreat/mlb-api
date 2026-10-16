@@ -94,7 +94,9 @@ class TestBuildScoringPlayPayload:
         assert payload["body"] == "Top 5th · Single to left field"
         assert payload["gamePk"] == 123
         assert payload["atBatIndex"] == 42
-        assert payload["requireInteraction"] is True
+        # No device given, so the alert must not ask to persist. See
+        # TestPersistentAlertByDevice.
+        assert payload["requireInteraction"] is False
 
     def test_bottom_of_inning_home_scores(self):
         """Home team scores in bottom of inning."""
@@ -107,7 +109,7 @@ class TestBuildScoringPlayPayload:
 
         assert payload["title"] == "BOS scores! NYY 1 - BOS 2"
         assert payload["body"] == "Bot 3rd · Homer to left"
-        assert payload["requireInteraction"] is True
+        assert payload["requireInteraction"] is False
 
     def test_description_truncation(self):
         """Long descriptions get truncated to 120 chars."""
@@ -172,7 +174,7 @@ class TestBuildFinalPayload:
         assert payload["body"] == "ATL 5 – WSH 3"
         assert payload["gamePk"] == 555
         assert payload["atBatIndex"] == -1
-        assert payload["requireInteraction"] is True
+        assert payload["requireInteraction"] is False
 
     def test_final_missing_runs(self):
         """Handles missing run data in final payload."""
@@ -1101,6 +1103,97 @@ class TestRotateSubscription:
 
         assert result == {"status": "unchanged", "moved": 0}
         db.execute.assert_awaited_once()
+
+
+class TestPersistentAlertByDevice:
+    """macOS Chrome shows nothing at all for a payload asking to persist.
+
+    Measured against a live endpoint: the same notification was accepted by
+    the push service with and without `requireInteraction`, and only the one
+    without ever appeared. Every manual test had been going through
+    /notifications/test, which never set the flag - which is why the path
+    looked healthy while real scoring plays did not arrive.
+    """
+
+    @staticmethod
+    def _play():
+        return {
+            "about": {"inning": 9, "isTopInning": True},
+            "result": {
+                "description": "David Hamilton homers (1).",
+                "awayScore": 6,
+                "homeScore": 4,
+            },
+            "atBatIndex": 68,
+        }
+
+    def test_mobile_keeps_the_alert_on_screen(self):
+        payload = _build_payload(
+            self._play(), 849810, "MIL", "LAD", device_type="mobile"
+        )
+
+        assert payload["requireInteraction"] is True
+
+    def test_desktop_does_not_ask_to_persist(self):
+        payload = _build_payload(
+            self._play(), 849810, "MIL", "LAD", device_type="desktop"
+        )
+
+        assert payload["requireInteraction"] is False
+
+    def test_an_unclassified_device_does_not_ask_to_persist(self):
+        """Omitting it costs auto-dismiss; setting it wrongly costs the alert."""
+        payload = _build_payload(
+            self._play(), 849810, "MIL", "LAD", device_type=None
+        )
+
+        assert payload["requireInteraction"] is False
+
+    def test_the_final_follows_the_same_rule(self):
+        feed = {
+            "liveData": {
+                "linescore": {"teams": {"away": {"runs": 6}, "home": {"runs": 4}}}
+            }
+        }
+
+        mobile = _build_final_payload(
+            feed, 849810, "MIL", "LAD", device_type="mobile"
+        )
+        desktop = _build_final_payload(
+            feed, 849810, "MIL", "LAD", device_type="desktop"
+        )
+
+        assert mobile["requireInteraction"] is True
+        assert desktop["requireInteraction"] is False
+
+    async def test_each_subscriber_gets_a_payload_for_its_own_device(self):
+        """One play, two devices, two different flags."""
+        play = self._play()
+        sent = []
+
+        async def _capture(endpoint, p256dh, auth, payload):
+            sent.append((endpoint, payload["requireInteraction"]))
+
+            return "sent"
+
+        for device, endpoint in (("mobile", "m"), ("desktop", "d")):
+            subscription = Mock(
+                endpoint=endpoint,
+                p256dh="p",
+                auth="a",
+                game_pk=849810,
+                last_at_bat_index=60,
+                device_type=device,
+            )
+
+            with patch.object(
+                scoring_watcher.push_service, "send_push", AsyncMock(side_effect=_capture)
+            ):
+                await scoring_watcher._notify_subscriber(
+                    AsyncMock(), subscription, {68: play}, [68], "MIL", "LAD"
+                )
+
+        assert sent == [("m", True), ("d", False)]
 
 
 class TestClassifyDevice:

@@ -115,6 +115,25 @@ def _scoring_description(play: dict[str, Any]) -> str:
     return play.get("result", {}).get("description") or "Run scored"
 
 
+def _wants_persistent_alert(device_type: str | None) -> bool:
+    """Whether to ask for a notification that stays on screen until dismissed.
+
+    `requireInteraction` keeps an alert that arrived mid-inning from vanishing
+    before the user looks, which is worth having on a phone. macOS Chrome,
+    though, does not display a notification that asks for it AT ALL - measured
+    by sending the same payload to the same endpoint twice, once with the flag
+    and once without: the push service accepted both, only the one without
+    ever appeared.
+
+    Staying on screen is a nicety. Being shown is the entire point, so the
+    flag is only set where it is known to be harmless.
+
+    Unknown devices are treated as desktop: omitting it costs an alert that
+    auto-dismisses, while setting it wrongly costs the alert entirely.
+    """
+    return device_type == "mobile"
+
+
 def _build_payload(
     play: dict[str, Any],
     game_pk: int,
@@ -122,6 +141,7 @@ def _build_payload(
     home_abbr: str,
     away_id: int | None = None,
     home_id: int | None = None,
+    device_type: str | None = None,
 ) -> dict[str, Any]:
     """
     Shape one scoring play into a push payload.
@@ -154,7 +174,7 @@ def _build_payload(
         "body": f"{half} {_ordinal(inning)} · {description}",
         "gamePk": game_pk,
         "atBatIndex": play.get("atBatIndex", -1),
-        "requireInteraction": True,
+        "requireInteraction": _wants_persistent_alert(device_type),
     }
 
     icon = matchup_icon_url(fielding_id, scoring_id)
@@ -200,6 +220,7 @@ async def _notify_subscriber(
             home_abbr,
             away_id,
             home_id,
+            subscription.device_type,
         )
 
         result = await push_service.send_push(
@@ -262,6 +283,7 @@ def _build_final_payload(
     home_abbr: str,
     away_id: int | None = None,
     home_id: int | None = None,
+    device_type: str | None = None,
 ) -> dict[str, Any]:
     """
     Shape game-final notification.
@@ -277,7 +299,7 @@ def _build_final_payload(
         "body": f"{away_abbr} {away_score} – {home_abbr} {home_score}",
         "gamePk": game_pk,
         "atBatIndex": -1,
-        "requireInteraction": True,
+        "requireInteraction": _wants_persistent_alert(device_type),
     }
 
     # The winner's logo in front. A tie here means a suspended game resumed to
@@ -328,12 +350,21 @@ async def _handle_final(
 
     attempts = _final_attempts.get(game_pk, 0) + 1
     give_up = attempts >= MAX_FINAL_SEND_ATTEMPTS
-    payload = _build_final_payload(
-        feed, game_pk, away_abbr, home_abbr, away_id, home_id
-    )
     retry_wanted = False
 
     for subscription in subscriptions:
+        # Built per subscriber: whether a notification may ask to stay on
+        # screen depends on the device receiving it.
+        payload = _build_final_payload(
+            feed,
+            game_pk,
+            away_abbr,
+            home_abbr,
+            away_id,
+            home_id,
+            subscription.device_type,
+        )
+
         result = await push_service.send_push(
             endpoint=subscription.endpoint,
             p256dh=subscription.p256dh,
