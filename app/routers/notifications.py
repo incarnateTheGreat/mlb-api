@@ -111,6 +111,11 @@ class SubscribeRequest(BaseModel):
     game_pk: int = Field(..., gt=0)
     # Seeds the dedup cursor so opting in mid-game doesn't replay earlier runs.
     last_at_bat_index: int = -1
+    # Set when the caller is re-registering an endpoint that may already be
+    # known, rather than opting in. The stored cursor is the server's record
+    # of what it has actually delivered; a re-registration knows only what the
+    # page is showing, which can already include a play still in flight.
+    seed_only: bool = False
 
 
 class UnsubscribeRequest(BaseModel):
@@ -213,7 +218,11 @@ async def subscribe(
         # Keys can be rotated by the browser, so always refresh them.
         existing.p256dh = keys.p256dh
         existing.auth = keys.auth
-        existing.last_at_bat_index = body.last_at_bat_index
+
+        # A re-registration must not rewind or skip what is already queued.
+        if not body.seed_only:
+            existing.last_at_bat_index = body.last_at_bat_index
+
         # Backfills rows written before these columns existed.
         existing.device_type = device_type
         existing.user_agent = user_agent

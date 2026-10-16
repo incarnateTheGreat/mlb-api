@@ -903,6 +903,46 @@ class TestLogStreamRouting:
         assert len(logging.getLogger("app").handlers) == 2
 
 
+class TestSeedOnlySubscribe:
+    """A re-registration must not disturb the delivery cursor.
+
+    The browser rotates its push endpoint and the client re-registers to
+    repair it. That request knows only what the page is showing, which can
+    already include a play whose push is still in flight - adopting it as the
+    cursor would mark that play delivered and skip it.
+    """
+
+    def test_seed_only_defaults_to_false(self):
+        from app.routers.notifications import SubscribeRequest
+
+        body = SubscribeRequest(
+            subscription={
+                "endpoint": "https://fcm.googleapis.com/fcm/send/abc",
+                "keys": {"p256dh": "k", "auth": "a"},
+            },
+            game_pk=849810,
+            last_at_bat_index=39,
+        )
+
+        # Opting in explicitly still seeds the cursor.
+        assert body.seed_only is False
+
+    def test_seed_only_round_trips(self):
+        from app.routers.notifications import SubscribeRequest
+
+        body = SubscribeRequest(
+            subscription={
+                "endpoint": "https://fcm.googleapis.com/fcm/send/abc",
+                "keys": {"p256dh": "k", "auth": "a"},
+            },
+            game_pk=849810,
+            last_at_bat_index=39,
+            seed_only=True,
+        )
+
+        assert body.seed_only is True
+
+
 class TestClassifyDevice:
     """Test device classification from Client Hints and User-Agent."""
     def test_client_hint_mobile(self):
