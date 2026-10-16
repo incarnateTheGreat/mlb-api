@@ -17,7 +17,10 @@ from sqlalchemy import select
 from app.database import get_session_maker
 from app.models.notifications import PushSubscription
 from app.services.mlb_client import get_mlb_client
-from app.services.scoring_watcher import _collect_scoring_plays
+from app.services.scoring_watcher import (
+    _collect_scoring_plays,
+    _wants_persistent_alert,
+)
 
 
 async def main() -> None:
@@ -36,7 +39,9 @@ async def main() -> None:
     for row in rows:
         print(
             f"  id={row.id} game={row.game_pk} cursor={row.last_at_bat_index} "
-            f"device={row.device_type} endpoint=...{row.endpoint[-12:]}"
+            f"device={row.device_type} "
+            f"requireInteraction={_wants_persistent_alert(row.device_type)} "
+            f"endpoint=...{row.endpoint[-12:]}"
         )
 
     client = get_mlb_client()
