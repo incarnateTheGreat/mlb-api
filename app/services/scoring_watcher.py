@@ -222,7 +222,19 @@ async def _notify_subscriber(
         )
 
         if result == "expired":
-            # The browser install is gone; stop tracking it entirely.
+            # The push service no longer knows this address, so the row can
+            # never be delivered to again. Logged loudly because the browser
+            # is NOT told: it still holds a (rotated) subscription and the
+            # toggle still reads as on, so from the device's side the alerts
+            # simply stop. Silently dropping the row here is what makes that
+            # look like notifications working intermittently.
+            logger.warning(
+                "Dropping expired subscription: game=%s endpoint=%s cursor=%s",
+                subscription.game_pk,
+                subscription.endpoint[:40],
+                subscription.last_at_bat_index,
+            )
+
             await db.delete(subscription)
 
             return
