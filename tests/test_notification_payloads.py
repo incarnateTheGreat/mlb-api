@@ -943,6 +943,166 @@ class TestSeedOnlySubscribe:
         assert body.seed_only is True
 
 
+class TestPushEndpointValidation:
+    """A stored endpoint is a URL the watcher later POSTs to.
+
+    An attacker able to register an arbitrary one would have the server make
+    requests on their behalf, reaching anything the host can see.
+    """
+
+    def test_a_real_push_endpoint_is_accepted(self):
+        from app.routers.notifications import validate_push_endpoint
+
+        endpoint = "https://fcm.googleapis.com/fcm/send/cTzG-abc123"
+
+        assert validate_push_endpoint(endpoint) == endpoint
+
+    @pytest.mark.parametrize(
+        "endpoint",
+        [
+            "http://fcm.googleapis.com/fcm/send/abc",  # plaintext
+            "https://169.254.169.254/latest/meta-data/",  # cloud metadata
+            "https://127.0.0.1/fcm/send/abc",  # loopback
+            "https://localhost/fcm/send/abc",
+            "https://internal-api/fcm/send/abc",  # single label
+            "https://db.internal/fcm/send/abc",
+            "https://printer.local/fcm/send/abc",
+            "file:///etc/passwd",
+        ],
+    )
+    def test_unreachable_or_internal_endpoints_are_rejected(self, endpoint):
+        from app.routers.notifications import validate_push_endpoint
+
+        with pytest.raises(ValueError):
+            validate_push_endpoint(endpoint)
+
+    def test_the_subscribe_payload_enforces_it(self):
+        from pydantic import ValidationError
+
+        from app.routers.notifications import SubscriptionPayload
+
+        with pytest.raises(ValidationError):
+            SubscriptionPayload(
+                endpoint="https://169.254.169.254/latest/meta-data/",
+                keys={"p256dh": "k", "auth": "a"},
+            )
+
+
+class TestRotateSubscription:
+    """A rotated endpoint must carry its games - and its cursors - across."""
+
+    @staticmethod
+    def _row(game_pk: int, cursor: int, endpoint: str):
+        row = Mock()
+        row.game_pk = game_pk
+        row.last_at_bat_index = cursor
+        row.endpoint = endpoint
+        row.p256dh = "old-p"
+        row.auth = "old-a"
+
+        return row
+
+    @staticmethod
+    def _body(old: str, new: str):
+        from app.routers.notifications import RotateRequest
+
+        return RotateRequest(
+            old_endpoint=old,
+            subscription={
+                "endpoint": new,
+                "keys": {"p256dh": "new-p", "auth": "new-a"},
+            },
+        )
+
+    async def test_rows_move_and_keep_their_cursor(self):
+        from app.routers.notifications import rotate
+
+        old = "https://fcm.googleapis.com/fcm/send/old"
+        new = "https://fcm.googleapis.com/fcm/send/new"
+
+        row = self._row(849810, 44, old)
+
+        db = AsyncMock()
+        db.scalars = AsyncMock(side_effect=[[row], []])
+
+        result = await rotate(self._body(old, new), db)
+
+        assert result == {"status": "rotated", "moved": 1}
+        assert row.endpoint == new
+        assert row.p256dh == "new-p"
+        # The whole point: a fresh subscribe would have had to guess this.
+        assert row.last_at_bat_index == 44
+
+    async def test_every_game_the_browser_follows_moves(self):
+        from app.routers.notifications import rotate
+
+        old = "https://fcm.googleapis.com/fcm/send/old"
+        new = "https://fcm.googleapis.com/fcm/send/new"
+
+        rows = [self._row(1, 5, old), self._row(2, 9, old)]
+
+        db = AsyncMock()
+        db.scalars = AsyncMock(side_effect=[rows, []])
+
+        result = await rotate(self._body(old, new), db)
+
+        assert result["moved"] == 2
+        assert all(row.endpoint == new for row in rows)
+
+    async def test_colliding_rows_merge_on_the_furthest_cursor(self):
+        """The browser may already have registered its new address.
+
+        (endpoint, game_pk) is unique, so the rows have to be reconciled
+        rather than both kept.
+        """
+        from app.routers.notifications import rotate
+
+        old = "https://fcm.googleapis.com/fcm/send/old"
+        new = "https://fcm.googleapis.com/fcm/send/new"
+
+        stale = self._row(849810, 44, old)
+        current = self._row(849810, 13, new)
+
+        db = AsyncMock()
+        db.scalars = AsyncMock(side_effect=[[stale], [current]])
+
+        result = await rotate(self._body(old, new), db)
+
+        assert result["moved"] == 0
+        # Taking the lower cursor would replay plays the user already saw.
+        assert current.last_at_bat_index == 44
+        db.delete.assert_awaited_once_with(stale)
+
+    async def test_an_unknown_old_endpoint_is_not_an_error(self):
+        """The service worker cannot know whether the rows still exist."""
+        from app.routers.notifications import rotate
+
+        db = AsyncMock()
+        db.scalars = AsyncMock(return_value=[])
+
+        result = await rotate(
+            self._body(
+                "https://fcm.googleapis.com/fcm/send/gone",
+                "https://fcm.googleapis.com/fcm/send/new",
+            ),
+            db,
+        )
+
+        assert result == {"status": "unknown", "moved": 0}
+
+    async def test_an_unchanged_endpoint_still_refreshes_keys(self):
+        from app.routers.notifications import rotate
+
+        same = "https://fcm.googleapis.com/fcm/send/same"
+
+        db = AsyncMock()
+
+        result = await rotate(self._body(same, same), db)
+
+        assert result == {"status": "unchanged", "moved": 0}
+        db.execute.assert_awaited_once()
+
+
 class TestClassifyDevice:
     """Test device classification from Client Hints and User-Agent."""
     def test_client_hint_mobile(self):

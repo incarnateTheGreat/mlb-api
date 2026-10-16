@@ -9,12 +9,14 @@ Mutative routes go through CSRFMiddleware, so the frontend must send
 X-CSRF-Token. apiFetch() in the React Router app does this automatically.
 """
 
+import ipaddress
 import logging
+from urllib.parse import urlparse
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Path, Request, Response
-from pydantic import BaseModel, Field
-from sqlalchemy import delete, select
+from pydantic import BaseModel, Field, field_validator
+from sqlalchemy import delete, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
@@ -92,6 +94,56 @@ def classify_device(
     )
 
 
+# Hostnames that never belong to a real push service but do reach things the
+# server should not be made to fetch - cloud metadata, loopback, and anything
+# resolvable only inside the deployment network.
+_BLOCKED_ENDPOINT_SUFFIXES = (
+    ".local",
+    ".internal",
+    ".localdomain",
+)
+
+
+def validate_push_endpoint(endpoint: str) -> str:
+    """Reject endpoints the server should never be asked to deliver to.
+
+    A stored endpoint is a URL the watcher later POSTs to, so an attacker who
+    could register an arbitrary one would have the server make requests on
+    their behalf - server-side request forgery, reaching anything the host can
+    see. A browser only ever produces an `https` URL on a public push service,
+    so nothing legitimate is lost here.
+    """
+    parsed = urlparse(endpoint)
+
+    if parsed.scheme != "https":
+        raise ValueError("Push endpoint must use https")
+
+    host = parsed.hostname
+
+    if not host:
+        raise ValueError("Push endpoint must include a host")
+
+    lowered = host.lower()
+
+    # An IP literal is never a push service, and is how the metadata endpoints
+    # (169.254.169.254) and loopback would be reached.
+    try:
+        ipaddress.ip_address(lowered)
+    except ValueError:
+        pass
+    else:
+        raise ValueError("Push endpoint must not address an IP directly")
+
+    if lowered == "localhost" or lowered.endswith(_BLOCKED_ENDPOINT_SUFFIXES):
+        raise ValueError("Push endpoint must be publicly routable")
+
+    # A single-label host resolves only through internal search domains.
+    if "." not in lowered:
+        raise ValueError("Push endpoint must be a fully qualified host")
+
+    return endpoint
+
+
 class SubscriptionKeys(BaseModel):
     """The encryption keys from PushSubscription.toJSON()."""
 
@@ -104,6 +156,11 @@ class SubscriptionPayload(BaseModel):
 
     endpoint: str
     keys: SubscriptionKeys
+
+    @field_validator("endpoint")
+    @classmethod
+    def _endpoint_is_deliverable(cls, value: str) -> str:
+        return validate_push_endpoint(value)
 
 
 class SubscribeRequest(BaseModel):
@@ -121,6 +178,18 @@ class SubscribeRequest(BaseModel):
 class UnsubscribeRequest(BaseModel):
     endpoint: str
     game_pk: int = Field(..., gt=0)
+
+
+class RotateRequest(BaseModel):
+    """A browser reporting that its push address has changed.
+
+    Sent by the service worker from `pushsubscriptionchange`, which can fire
+    while the app is closed - so this carries no game: every row for the old
+    address moves, whichever games they belong to.
+    """
+
+    old_endpoint: str
+    subscription: SubscriptionPayload
 
 
 @router.get(
@@ -260,6 +329,106 @@ async def unsubscribe(
     await db.commit()
 
     return {"status": "unsubscribed", "gamePk": body.game_pk}
+
+
+@router.post("/rotate")
+async def rotate(
+    body: RotateRequest,
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """
+    Point every subscription for a browser at its new push address.
+
+    A push endpoint is not permanent: the browser reissues it after storage
+    pressure, a long idle period or a push-service re-registration. The old
+    address stops accepting messages, so the watcher deletes those rows and
+    the device goes silent while its toggle still reads as on.
+
+    Moving the rows rather than recreating them is what preserves
+    `last_at_bat_index`. A fresh subscribe would have to guess that cursor
+    from whatever the page is showing, which can already include a play whose
+    push is still in flight.
+
+    `old_endpoint` is only ever used to look rows up, so it is deliberately
+    not validated: a row stored before endpoint validation existed still has
+    to be movable.
+    """
+    new_endpoint = body.subscription.endpoint
+    keys = body.subscription.keys
+
+    if body.old_endpoint == new_endpoint:
+        # Nothing moved. Refresh the keys anyway: the browser can reissue
+        # those without changing the address.
+        await db.execute(
+            update(PushSubscription)
+            .where(PushSubscription.endpoint == new_endpoint)
+            .values(p256dh=keys.p256dh, auth=keys.auth)
+        )
+        await db.commit()
+
+        return {"status": "unchanged", "moved": 0}
+
+    stale = list(
+        await db.scalars(
+            select(PushSubscription).where(
+                PushSubscription.endpoint == body.old_endpoint
+            )
+        )
+    )
+
+    if not stale:
+        # Already cleaned up, or this browser was never registered. Not an
+        # error: the service worker cannot know which it is.
+        logger.info(
+            "Rotate found no rows for old endpoint %s", body.old_endpoint[:40]
+        )
+
+        return {"status": "unknown", "moved": 0}
+
+    # The browser may already have registered its new address for some of
+    # these games, and (endpoint, game_pk) is unique.
+    existing = {
+        row.game_pk: row
+        for row in await db.scalars(
+            select(PushSubscription).where(
+                PushSubscription.endpoint == new_endpoint
+            )
+        )
+    }
+
+    moved = 0
+
+    for row in stale:
+        duplicate = existing.get(row.game_pk)
+
+        if duplicate is None:
+            row.endpoint = new_endpoint
+            row.p256dh = keys.p256dh
+            row.auth = keys.auth
+            moved += 1
+
+            continue
+
+        # Keep whichever cursor is further along, so the move can neither
+        # replay a delivered play nor skip a pending one.
+        duplicate.last_at_bat_index = max(
+            duplicate.last_at_bat_index, row.last_at_bat_index
+        )
+        duplicate.p256dh = keys.p256dh
+        duplicate.auth = keys.auth
+
+        await db.delete(row)
+
+    await db.commit()
+
+    logger.info(
+        "Rotated %d subscription(s) from %s to %s",
+        moved,
+        body.old_endpoint[:40],
+        new_endpoint[:40],
+    )
+
+    return {"status": "rotated", "moved": moved}
 
 
 @router.post(
