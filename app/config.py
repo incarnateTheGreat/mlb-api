@@ -48,6 +48,9 @@ class Settings(BaseSettings):
     # Scoring play watcher
     watcher_enabled: bool = True
     watcher_poll_seconds: int = 10
+    # How long before first pitch to start polling. A subscription for a game
+    # days away must not hold the serverless database awake until it starts.
+    watcher_lead_seconds: int = 600
     
     # Logging. uvicorn configures only its own loggers, leaving the root
     # logger at WARNING - which silently discards every logger.info() in the

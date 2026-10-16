@@ -14,6 +14,7 @@ from unittest.mock import AsyncMock, Mock, patch
 import asyncio
 import logging
 import sys
+from datetime import datetime, timezone
 
 import pytest
 
@@ -1267,6 +1268,7 @@ class TestWatcherIdles:
         """
         settings = Mock()
         settings.watcher_poll_seconds = 0.001
+        settings.watcher_lead_seconds = 600
 
         with (
             patch.object(scoring_watcher, "get_settings", return_value=settings),
@@ -1311,7 +1313,7 @@ class TestWatcherIdles:
             nonlocal ticks
             ticks += 1
 
-            return False
+            return None
 
         with patch.object(scoring_watcher, "_tick", fake_tick):
             task = asyncio.create_task(scoring_watcher.run_scoring_watcher())
@@ -1339,7 +1341,7 @@ class TestWatcherIdles:
             nonlocal ticks
             ticks += 1
 
-            return False
+            return None
 
         with patch.object(scoring_watcher, "_tick", fake_tick):
             task = asyncio.create_task(scoring_watcher.run_scoring_watcher())
@@ -1377,7 +1379,7 @@ class TestWatcherIdles:
             nonlocal ticks
             ticks += 1
 
-            return True
+            return 0.001
 
         with patch.object(scoring_watcher, "_tick", fake_tick):
             await self._run_until(lambda: ticks >= 3)
@@ -1404,3 +1406,208 @@ class TestWatcherIdles:
             await self._run_until(lambda: ticks >= 3)
 
         assert ticks >= 3, "watcher gave up after a transient failure"
+
+    @pytest.mark.asyncio
+    async def test_a_long_wait_is_interrupted_by_a_new_subscription(self):
+        """Subscribing must not have to wait out a sleep set days ago.
+
+        The watcher sleeps until the next scheduled first pitch. Subscribing
+        to a game that starts sooner has to cut that short, or the alert
+        arrives after the game it was for.
+        """
+        ticks = 0
+
+        async def fake_tick():
+            nonlocal ticks
+            ticks += 1
+
+            # Far longer than the test could ever wait for.
+            return 3600.0
+
+        with patch.object(scoring_watcher, "_tick", fake_tick):
+            task = asyncio.create_task(scoring_watcher.run_scoring_watcher())
+            loop = asyncio.get_running_loop()
+
+            try:
+                while ticks < 1:
+                    await asyncio.sleep(0.01)
+
+                scoring_watcher.notify_subscriptions_changed()
+
+                deadline = loop.time() + 2.0
+
+                while ticks < 2:
+                    if loop.time() > deadline:
+                        raise AssertionError(
+                            "watcher slept through a new subscription"
+                        )
+
+                    await asyncio.sleep(0.01)
+            finally:
+                task.cancel()
+
+                try:
+                    await task
+                except asyncio.CancelledError:
+                    pass
+
+        assert ticks >= 2
+
+
+class TestWatcherWaitsForFirstPitch:
+    """A subscription days ahead of a game must not hold the database awake.
+
+    Subscribing is deliberately cheap and open-ended - a whole homestand can
+    be armed at once - so "has a subscriber" cannot mean "poll now". Ten games
+    over ten days would otherwise keep a serverless compute awake for ten
+    days, which exceeds a monthly allowance on its own.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _clean_caches(self):
+        """Schedule state is module-level; tests must not leak into each other."""
+        scoring_watcher._due_games.clear()
+        scoring_watcher._start_times.clear()
+
+        settings = Mock()
+        settings.watcher_poll_seconds = 10
+        settings.watcher_lead_seconds = 600
+
+        with patch.object(
+            scoring_watcher, "get_settings", return_value=settings
+        ):
+            yield
+
+        scoring_watcher._due_games.clear()
+        scoring_watcher._start_times.clear()
+
+    def _client_returning(self, starts):
+        """An MLB client whose schedule call returns `starts`."""
+        client = Mock()
+        client.get_game_start_times = AsyncMock(return_value=starts)
+
+        return client
+
+    @pytest.mark.asyncio
+    async def test_a_game_days_away_is_not_polled(self):
+        """The whole point: a future game must produce no feed requests."""
+        now = datetime(2026, 10, 16, 12, 0, tzinfo=timezone.utc)
+        client = self._client_returning({849817: "2026-10-26T00:00:00Z"})
+
+        with patch.object(
+            scoring_watcher, "get_mlb_client", return_value=client
+        ):
+            due, next_start = await scoring_watcher._partition_games(
+                [849817], now
+            )
+
+        assert due == []
+        assert next_start == datetime(2026, 10, 26, 0, 0, tzinfo=timezone.utc)
+
+    @pytest.mark.asyncio
+    async def test_a_game_inside_the_lead_window_is_polled(self):
+        """Polling has to start before first pitch, not at it."""
+        now = datetime(2026, 10, 17, 23, 55, tzinfo=timezone.utc)
+        client = self._client_returning({849817: "2026-10-18T00:00:00Z"})
+
+        with patch.object(
+            scoring_watcher, "get_mlb_client", return_value=client
+        ):
+            due, next_start = await scoring_watcher._partition_games(
+                [849817], now
+            )
+
+        assert due == [849817]
+        assert next_start is None
+
+    @pytest.mark.asyncio
+    async def test_an_unknown_start_time_is_polled(self):
+        """Fail open: being early wastes compute, being wrong misses the game."""
+        now = datetime(2026, 10, 16, 12, 0, tzinfo=timezone.utc)
+        client = self._client_returning({})
+
+        with patch.object(
+            scoring_watcher, "get_mlb_client", return_value=client
+        ):
+            due, _ = await scoring_watcher._partition_games([849817], now)
+
+        assert due == [849817]
+
+    @pytest.mark.asyncio
+    async def test_a_schedule_failure_is_polled(self):
+        """An MLB API outage must not silently disable notifications."""
+        now = datetime(2026, 10, 16, 12, 0, tzinfo=timezone.utc)
+        client = Mock()
+        client.get_game_start_times = AsyncMock(
+            side_effect=RuntimeError("statsapi down")
+        )
+
+        with patch.object(
+            scoring_watcher, "get_mlb_client", return_value=client
+        ):
+            due, _ = await scoring_watcher._partition_games([849817], now)
+
+        assert due == [849817]
+
+    @pytest.mark.asyncio
+    async def test_every_pending_game_costs_one_request(self):
+        """Arming a homestand must not mean a request per game."""
+        now = datetime(2026, 10, 16, 12, 0, tzinfo=timezone.utc)
+        game_pks = [849810 + n for n in range(10)]
+        client = self._client_returning(
+            {game_pk: "2026-10-26T00:00:00Z" for game_pk in game_pks}
+        )
+
+        with patch.object(
+            scoring_watcher, "get_mlb_client", return_value=client
+        ):
+            await scoring_watcher._partition_games(game_pks, now)
+
+        assert client.get_game_start_times.await_count == 1
+        assert sorted(
+            client.get_game_start_times.await_args.args[0]
+        ) == game_pks
+
+    @pytest.mark.asyncio
+    async def test_a_live_game_stops_re_reading_the_schedule(self):
+        """Once due, a game stays due - no lookup on every tick for hours."""
+        now = datetime(2026, 10, 17, 23, 55, tzinfo=timezone.utc)
+        client = self._client_returning({849817: "2026-10-18T00:00:00Z"})
+
+        with patch.object(
+            scoring_watcher, "get_mlb_client", return_value=client
+        ):
+            for _ in range(5):
+                due, _ = await scoring_watcher._partition_games([849817], now)
+
+        assert due == [849817]
+        assert client.get_game_start_times.await_count == 1
+
+    @pytest.mark.asyncio
+    async def test_cached_state_is_dropped_when_a_game_ends(self):
+        """Rows vanish at game end; the caches must not grow forever."""
+        scoring_watcher._due_games.add(849817)
+        scoring_watcher._start_times[849817] = (None, 0.0)
+
+        scoring_watcher._forget_unsubscribed_games(set())
+
+        assert scoring_watcher._due_games == set()
+        assert scoring_watcher._start_times == {}
+
+    @pytest.mark.asyncio
+    async def test_a_naive_start_time_is_treated_as_utc(self):
+        """Comparing naive and aware datetimes raises; statsapi returns UTC."""
+        now = datetime(2026, 10, 16, 12, 0, tzinfo=timezone.utc)
+        # No trailing "Z" - the parse yields a naive datetime.
+        client = self._client_returning({849817: "2026-10-26T00:00:00"})
+
+        with patch.object(
+            scoring_watcher, "get_mlb_client", return_value=client
+        ):
+            due, next_start = await scoring_watcher._partition_games(
+                [849817], now
+            )
+
+        assert due == []
+        assert next_start is not None
+        assert next_start.tzinfo is not None

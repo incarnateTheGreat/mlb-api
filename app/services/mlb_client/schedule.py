@@ -54,6 +54,44 @@ class ScheduleMixin:
         
         return await self._get("/schedule", params=params)
     
+    async def get_game_start_times(
+        self, game_ids: list[int]
+    ) -> dict[int, str]:
+        """
+        First pitch for several games at once, as ISO timestamps.
+        
+        Built for the scoring watcher, which has to know whether a subscribed
+        game is worth polling yet. That makes it a hot-ish path on a cold
+        schedule, so it asks for as little as possible: the `gamePks` filter
+        answers every pending game in ONE request, and `fields` trims the
+        response from ~1.6KB per game to ~140 bytes.
+        
+        Games the schedule does not return are simply absent from the result;
+        the caller decides what an unknown start time means.
+        """
+        if not game_ids:
+            return {}
+        
+        data = await self._get(
+            "/schedule",
+            params={
+                "gamePks": ",".join(str(game_id) for game_id in game_ids),
+                "fields": "dates,games,gamePk,gameDate",
+            },
+        )
+        
+        starts: dict[int, str] = {}
+        
+        for date_entry in data.get("dates", []) or []:
+            for game in date_entry.get("games", []) or []:
+                game_pk = game.get("gamePk")
+                game_date = game.get("gameDate")
+                
+                if game_pk is not None and game_date:
+                    starts[game_pk] = game_date
+        
+        return starts
+    
     async def get_schedule_range(
         self,
         start_date: date,

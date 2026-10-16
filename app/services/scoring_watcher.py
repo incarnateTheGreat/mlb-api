@@ -6,12 +6,18 @@ when a run scores, so the server has to notice on its own: it polls the MLB
 feed for games that have at least one subscriber, diffs the scoring plays
 against what each subscriber has already been sent, and pushes the difference.
 
+Polling is gated on the clock as well as on subscriptions. A subscription may
+be registered days before first pitch, and the database it would be polling is
+serverless - billed for the time it stays awake - so the watcher sleeps until
+shortly before the game starts rather than idling against it.
+
 Runs as a single asyncio task from the FastAPI lifespan. That assumes one
 replica - see the note in `run_scoring_watcher` if that ever changes.
 """
 
 import asyncio
 import logging
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from sqlalchemy import select
@@ -54,10 +60,120 @@ _final_attempts: dict[int, int] = {}
 # truth: the watcher always re-reads the database before acting on it.
 _subscriptions_changed = asyncio.Event()
 
+# Games whose lead time has passed. A game only ever crosses that line once,
+# so remembering it keeps a live game from re-reading the schedule every tick.
+_due_games: set[int] = set()
+
+# game_pk -> (first pitch or None, monotonic time it was read). Start times
+# move - rain delays, doubleheaders, suspended games - so this expires rather
+# than being read once and trusted for days.
+_start_times: dict[int, tuple[datetime | None, float]] = {}
+START_TIME_TTL_SECONDS = 1800
+
+# Longest the watcher will sleep while only future games are subscribed.
+# Bounds the damage if a start time moves earlier after it was cached, and
+# guarantees the schedule is re-read at least this often.
+MAX_IDLE_SLEEP_SECONDS = 6 * 60 * 60
+
 
 def notify_subscriptions_changed() -> None:
     """Wake an idle watcher after a subscription is written."""
     _subscriptions_changed.set()
+
+
+def _forget_unsubscribed_games(subscribed: set[int]) -> None:
+    """Drop cached schedule state for games nobody is subscribed to.
+
+    Rows are deleted when a game ends, so without this both caches would grow
+    for the life of the process.
+    """
+    _due_games.intersection_update(subscribed)
+
+    for game_pk in [pk for pk in _start_times if pk not in subscribed]:
+        del _start_times[game_pk]
+
+
+async def _load_start_times(game_pks: list[int]) -> None:
+    """Cache first-pitch times for any game whose entry is missing or stale.
+
+    One request covers every game that needs one, so a week of subscriptions
+    costs the same single call as a single game.
+    """
+    now = asyncio.get_running_loop().time()
+
+    wanted = [
+        game_pk
+        for game_pk in game_pks
+        if game_pk not in _due_games
+        and (
+            game_pk not in _start_times
+            or now - _start_times[game_pk][1] >= START_TIME_TTL_SECONDS
+        )
+    ]
+
+    if not wanted:
+        return
+
+    try:
+        raw_times = await get_mlb_client().get_game_start_times(wanted)
+    except Exception:
+        # Leave the cache alone so the next tick retries. Callers treat a
+        # missing entry as "start unknown", which polls rather than skips.
+        logger.exception("Could not read start times for games %s", wanted)
+
+        return
+
+    for game_pk in wanted:
+        raw = raw_times.get(game_pk)
+        start: datetime | None = None
+
+        if raw:
+            try:
+                start = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+            except ValueError:
+                logger.warning(
+                    "Unparseable start time %r for game %s", raw, game_pk
+                )
+
+        if start is not None and start.tzinfo is None:
+            # statsapi returns UTC; an aware value is required to compare.
+            start = start.replace(tzinfo=timezone.utc)
+
+        _start_times[game_pk] = (start, now)
+
+
+async def _partition_games(
+    game_pks: list[int], now: datetime
+) -> tuple[list[int], datetime | None]:
+    """Split subscribed games into "poll now" and "wake up for later".
+
+    Returns the games to process and the earliest first pitch still ahead of
+    us, which is how long the watcher may safely sleep.
+    """
+    await _load_start_times(game_pks)
+
+    lead = timedelta(seconds=get_settings().watcher_lead_seconds)
+    due: list[int] = []
+    next_start: datetime | None = None
+
+    for game_pk in game_pks:
+        if game_pk in _due_games:
+            due.append(game_pk)
+
+            continue
+
+        cached = _start_times.get(game_pk)
+        start = cached[0] if cached else None
+
+        # An unknown start time is polled, not skipped. Being early wastes a
+        # little compute; being wrong misses the game entirely.
+        if start is None or now >= start - lead:
+            _due_games.add(game_pk)
+            due.append(game_pk)
+        elif next_start is None or start < next_start:
+            next_start = start
+
+    return due, next_start
 
 
 def _ordinal(n: int) -> str:
@@ -571,40 +687,65 @@ async def _process_game(db: AsyncSession, game_pk: int) -> None:
     await db.commit()
 
 
-async def _tick() -> bool:
+async def _tick() -> float | None:
     """
-    One pass over every game that currently has subscribers.
+    Poll every subscribed game that has started or is about to.
 
-    Returns whether any subscription exists, so the caller can choose between
-    polling again and standing down.
+    Returns how many seconds to wait before the next pass, or None when there
+    is nothing to wait for and the watcher should park entirely.
     """
     session_maker = get_session_maker()
+    now = datetime.now(timezone.utc)
+    settings = get_settings()
 
     async with session_maker() as db:
         game_pks = list(
             await db.scalars(select(PushSubscription.game_pk).distinct())
         )
 
-        for game_pk in game_pks:
+        _forget_unsubscribed_games(set(game_pks))
+
+        if not game_pks:
+            return None
+
+        due, next_start = await _partition_games(game_pks, now)
+
+        for game_pk in due:
             await _process_game(db, game_pk)
 
-    return bool(game_pks)
+    if due:
+        return float(settings.watcher_poll_seconds)
+
+    if next_start is None:
+        # Every game is in the future but none has a usable start time. They
+        # were treated as due, so this is unreachable; poll rather than park.
+        return float(settings.watcher_poll_seconds)
+
+    lead = timedelta(seconds=settings.watcher_lead_seconds)
+    delay = (next_start - lead - now).total_seconds()
+
+    return max(0.0, min(delay, MAX_IDLE_SLEEP_SECONDS))
 
 
 async def run_scoring_watcher() -> None:
     """
-    Poll subscribed games, and only subscribed games.
+    Poll subscribed games, and only while they are actually being played.
 
-    With nothing subscribed the loop parks on `_subscriptions_changed` and
-    issues no queries at all, letting the serverless database suspend. Baseball
-    is seasonal and games are a few hours long, so that idle state is the
-    normal one; polling through it is what exhausts the compute allowance.
+    The serverless database bills for the time it stays awake and suspends
+    after a few minutes idle, so every query outside a live game is pure
+    waste. Two things keep the loop quiet: with nothing subscribed it parks on
+    `_subscriptions_changed` and issues no queries at all, and with only
+    future games subscribed it sleeps until shortly before first pitch.
+
+    That second case is what makes subscribing to a whole homestand safe. Ten
+    games across ten days would otherwise keep the database awake for ten
+    days, which on its own exceeds a monthly compute allowance.
 
     Single-replica assumption: if the API is ever scaled out, every replica
     would run this loop and subscribers would get duplicate notifications.
     Guard it with a Postgres advisory lock before scaling. The wake-up signal
-    is in-process too, so a second replica would also miss subscriptions
-    registered by the first.
+    and the schedule cache are in-process too, so a second replica would also
+    miss subscriptions registered by the first.
     """
     settings = get_settings()
     interval = settings.watcher_poll_seconds
@@ -618,24 +759,39 @@ async def run_scoring_watcher() -> None:
         _subscriptions_changed.clear()
 
         try:
-            active = await _tick()
+            delay = await _tick()
         except asyncio.CancelledError:
             logger.info("Scoring play watcher stopped")
 
             raise
         except Exception:
-            # Never let one bad tick kill the loop. Assume there is still work
-            # to do, so a transient database error cannot park the watcher
-            # indefinitely - nothing would ever wake it again.
+            # Never let one bad tick kill the loop. Retry on the normal
+            # interval rather than parking, so a transient database error
+            # cannot strand the watcher with nothing left to wake it.
             logger.exception("Scoring watcher tick failed")
 
-            active = True
+            delay = float(interval)
 
-        if active:
-            await asyncio.sleep(interval)
+        if delay is None:
+            logger.info("No subscriptions - watcher idle until one is registered")
+
+            await _subscriptions_changed.wait()
 
             continue
 
-        logger.info("No subscriptions - watcher idle until one is registered")
+        if delay <= interval:
+            await asyncio.sleep(delay)
 
-        await _subscriptions_changed.wait()
+            continue
+
+        logger.info(
+            "Nothing due for %.1f min - sleeping until the next game starts",
+            delay / 60,
+        )
+
+        # Interruptible: subscribing to a game that starts shortly must not
+        # have to wait out a sleep scheduled for days from now.
+        try:
+            await asyncio.wait_for(_subscriptions_changed.wait(), timeout=delay)
+        except asyncio.TimeoutError:
+            pass
