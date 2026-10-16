@@ -11,6 +11,7 @@ Validates that the new notification format includes:
 
 from unittest.mock import AsyncMock, Mock, patch
 
+import asyncio
 import logging
 import sys
 
@@ -1243,3 +1244,163 @@ class TestClassifyDevice:
     def test_malformed_hint_falls_through_to_user_agent(self):
         """Invalid Client Hint falls back to User-Agent sniffing."""
         assert classify_device("iPhone", "garbage") == "mobile"
+
+
+class TestWatcherIdles:
+    """The watcher must not poll a serverless database around the clock.
+
+    Querying every few seconds through the long stretches when nobody is
+    subscribed keeps the compute permanently awake, which is enough on its own
+    to exhaust a monthly allowance and take the whole app offline. Standing
+    down is only safe if something reliably wakes it again, so these tests
+    pin both halves: that it stops, and that it restarts.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _fast_and_isolated(self):
+        """Give each test a short poll interval and its own wake-up event.
+
+        `asyncio.Event` binds to the first loop that awaits it, and every test
+        gets a fresh loop, so a module-level event shared between tests fails
+        with "bound to a different event loop". Production has one loop for
+        the process lifetime, so only the tests need this.
+        """
+        settings = Mock()
+        settings.watcher_poll_seconds = 0.001
+
+        with (
+            patch.object(scoring_watcher, "get_settings", return_value=settings),
+            patch.object(
+                scoring_watcher, "_subscriptions_changed", asyncio.Event()
+            ),
+        ):
+            yield
+
+    async def _run_until(self, condition, timeout=2.0):
+        """Run the watcher until `condition` holds, then cancel it."""
+        task = asyncio.create_task(scoring_watcher.run_scoring_watcher())
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + timeout
+
+        try:
+            while not condition():
+                if task.done():
+                    # Surfaces the real error instead of a bare timeout.
+                    await task
+
+                    raise AssertionError("watcher exited on its own")
+
+                if loop.time() > deadline:
+                    raise AssertionError("condition never became true")
+
+                await asyncio.sleep(0.01)
+        finally:
+            task.cancel()
+
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+
+    @pytest.mark.asyncio
+    async def test_stops_querying_when_nothing_is_subscribed(self):
+        """An empty tick parks the loop instead of scheduling another query."""
+        ticks = 0
+
+        async def fake_tick():
+            nonlocal ticks
+            ticks += 1
+
+            return False
+
+        with patch.object(scoring_watcher, "_tick", fake_tick):
+            task = asyncio.create_task(scoring_watcher.run_scoring_watcher())
+
+            try:
+                # Many poll intervals: had it stayed in the loop, the tick
+                # count would run into the dozens.
+                await asyncio.sleep(0.2)
+            finally:
+                task.cancel()
+
+                try:
+                    await task
+                except asyncio.CancelledError:
+                    pass
+
+        assert ticks == 1, f"idle watcher issued {ticks} queries, expected 1"
+
+    @pytest.mark.asyncio
+    async def test_subscribing_wakes_the_idle_watcher(self):
+        """Without this the watcher stays parked and nothing is ever sent."""
+        ticks = 0
+
+        async def fake_tick():
+            nonlocal ticks
+            ticks += 1
+
+            return False
+
+        with patch.object(scoring_watcher, "_tick", fake_tick):
+            task = asyncio.create_task(scoring_watcher.run_scoring_watcher())
+            loop = asyncio.get_running_loop()
+
+            try:
+                while ticks < 1:
+                    await asyncio.sleep(0.01)
+
+                scoring_watcher.notify_subscriptions_changed()
+
+                deadline = loop.time() + 2.0
+
+                while ticks < 2:
+                    if loop.time() > deadline:
+                        raise AssertionError("watcher never woke up")
+
+                    await asyncio.sleep(0.01)
+            finally:
+                task.cancel()
+
+                try:
+                    await task
+                except asyncio.CancelledError:
+                    pass
+
+        assert ticks >= 2
+
+    @pytest.mark.asyncio
+    async def test_keeps_polling_while_a_game_is_subscribed(self):
+        """A live game must still be polled on every interval."""
+        ticks = 0
+
+        async def fake_tick():
+            nonlocal ticks
+            ticks += 1
+
+            return True
+
+        with patch.object(scoring_watcher, "_tick", fake_tick):
+            await self._run_until(lambda: ticks >= 3)
+
+        assert ticks >= 3
+
+    @pytest.mark.asyncio
+    async def test_a_failing_tick_does_not_park_the_watcher(self):
+        """A database error must not be mistaken for "nothing subscribed".
+
+        Parking on an exception would be unrecoverable: the only thing that
+        wakes the watcher is a subscribe call, and the user has no reason to
+        make one when their toggle already reads as on.
+        """
+        ticks = 0
+
+        async def failing_tick():
+            nonlocal ticks
+            ticks += 1
+
+            raise RuntimeError("connection refused")
+
+        with patch.object(scoring_watcher, "_tick", failing_tick):
+            await self._run_until(lambda: ticks >= 3)
+
+        assert ticks >= 3, "watcher gave up after a transient failure"

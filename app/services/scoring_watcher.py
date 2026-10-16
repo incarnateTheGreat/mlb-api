@@ -40,6 +40,25 @@ MAX_FINAL_SEND_ATTEMPTS = 6
 # memory deliberately: losing it on restart just means a few extra retries.
 _final_attempts: dict[int, int] = {}
 
+# Raised when a subscription is registered, so the watcher can wait on this
+# instead of asking the database every few seconds whether anything changed.
+#
+# The database is serverless and bills for the time it stays awake. A query
+# every 10s around the clock never lets it suspend, which on its own is enough
+# to burn a whole monthly compute allowance on empty polls - most of them at
+# hours when no game is being played. So when nothing is subscribed the
+# watcher has to go completely silent rather than merely poll more slowly.
+#
+# In-process signal, which holds only because the watcher is single-replica
+# (see `run_scoring_watcher`). It is a latency optimisation, not the source of
+# truth: the watcher always re-reads the database before acting on it.
+_subscriptions_changed = asyncio.Event()
+
+
+def notify_subscriptions_changed() -> None:
+    """Wake an idle watcher after a subscription is written."""
+    _subscriptions_changed.set()
+
 
 def _ordinal(n: int) -> str:
     """Convert int to ordinal suffix (1st, 2nd, 3rd, 4th, etc.)."""
@@ -552,8 +571,13 @@ async def _process_game(db: AsyncSession, game_pk: int) -> None:
     await db.commit()
 
 
-async def _tick() -> None:
-    """One pass over every game that currently has subscribers."""
+async def _tick() -> bool:
+    """
+    One pass over every game that currently has subscribers.
+
+    Returns whether any subscription exists, so the caller can choose between
+    polling again and standing down.
+    """
     session_maker = get_session_maker()
 
     async with session_maker() as db:
@@ -564,14 +588,23 @@ async def _tick() -> None:
         for game_pk in game_pks:
             await _process_game(db, game_pk)
 
+    return bool(game_pks)
+
 
 async def run_scoring_watcher() -> None:
     """
-    Poll subscribed games forever.
+    Poll subscribed games, and only subscribed games.
+
+    With nothing subscribed the loop parks on `_subscriptions_changed` and
+    issues no queries at all, letting the serverless database suspend. Baseball
+    is seasonal and games are a few hours long, so that idle state is the
+    normal one; polling through it is what exhausts the compute allowance.
 
     Single-replica assumption: if the API is ever scaled out, every replica
     would run this loop and subscribers would get duplicate notifications.
-    Guard it with a Postgres advisory lock before scaling.
+    Guard it with a Postgres advisory lock before scaling. The wake-up signal
+    is in-process too, so a second replica would also miss subscriptions
+    registered by the first.
     """
     settings = get_settings()
     interval = settings.watcher_poll_seconds
@@ -579,14 +612,30 @@ async def run_scoring_watcher() -> None:
     logger.info("Scoring play watcher started (every %ss)", interval)
 
     while True:
+        # Cleared before the tick, never after: a subscription registered
+        # while the tick is running would otherwise be wiped out by the clear
+        # and leave the watcher idle with work already waiting for it.
+        _subscriptions_changed.clear()
+
         try:
-            await _tick()
+            active = await _tick()
         except asyncio.CancelledError:
             logger.info("Scoring play watcher stopped")
 
             raise
         except Exception:
-            # Never let one bad tick kill the loop.
+            # Never let one bad tick kill the loop. Assume there is still work
+            # to do, so a transient database error cannot park the watcher
+            # indefinitely - nothing would ever wake it again.
             logger.exception("Scoring watcher tick failed")
 
-        await asyncio.sleep(interval)
+            active = True
+
+        if active:
+            await asyncio.sleep(interval)
+
+            continue
+
+        logger.info("No subscriptions - watcher idle until one is registered")
+
+        await _subscriptions_changed.wait()

@@ -22,6 +22,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.database import get_db
 from app.models.notifications import PushSubscription
 from app.services import push_service
+from app.services.scoring_watcher import notify_subscriptions_changed
 from app.services.team_icons import matchup_icon_url, render_matchup_icon
 
 logger = logging.getLogger(__name__)
@@ -309,6 +310,10 @@ async def subscribe(
         )
 
     await db.commit()
+
+    # The watcher stops querying entirely when nothing is subscribed, so it
+    # cannot discover this row by polling. Hand it the news directly.
+    notify_subscriptions_changed()
 
     return {"status": "subscribed", "gamePk": body.game_pk}
 
