@@ -72,6 +72,13 @@ def get_engine():
             pool_pre_ping=True,  # Verify connections before using (important for serverless DBs)
             connect_args={"ssl": True},  # Enable SSL for Neon
         )
+
+        # Neon bills for the time the compute stays awake, which nothing in
+        # the stack reports back. Count it here so the cost of a change is
+        # measurable instead of inferred from a monthly email.
+        from app.services import db_metrics
+
+        db_metrics.instrument(_engine)
     return _engine
 
 

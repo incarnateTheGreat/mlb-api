@@ -31,7 +31,7 @@ from app.routers import (
     standings,
     teams,
 )
-from app.services import push_service
+from app.services import db_metrics, push_service
 from app.services.scoring_watcher import run_scoring_watcher
 
 logger = logging.getLogger(__name__)
@@ -173,7 +173,24 @@ app.include_router(notifications.router)  # Routes are /notifications/*
 @app.get("/health")
 async def health_check():
     """Health check endpoint for load balancers and monitoring."""
-    return {"status": "healthy", "debug": get_settings().debug}
+    # Database usage rides along because there is nowhere else to read it:
+    # Neon's consumption API is paid-plan only, and the Console keeps a single
+    # day of history on Free. Aggregate counters only - no query text, no row
+    # data, nothing tied to a user.
+    usage = db_metrics.snapshot()
+
+    return {
+        "status": "healthy",
+        "debug": get_settings().debug,
+        "database": {
+            "queries": usage.queries,
+            "connections": usage.connections,
+            "awakeHours": round(usage.awake_hours, 3),
+            "uptimeHours": round(usage.uptime_seconds / 3600, 3),
+            "awakePercent": round(usage.awake_fraction * 100, 1),
+            "estimatedCuHours": round(usage.cu_hours, 3),
+        },
+    }
 
 
 @app.get("/")

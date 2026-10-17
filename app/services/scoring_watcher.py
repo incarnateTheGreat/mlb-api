@@ -26,7 +26,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.config import get_settings
 from app.database import get_session_maker
 from app.models.notifications import PushSubscription
-from app.services import push_service
+from app.services import db_metrics, push_service
 from app.services.mlb_client import get_mlb_client
 from app.services.team_icons import matchup_icon_url
 
@@ -773,7 +773,11 @@ async def run_scoring_watcher() -> None:
             delay = float(interval)
 
         if delay is None:
-            logger.info("No subscriptions - watcher idle until one is registered")
+            logger.info(
+                "No subscriptions - watcher idle until one is registered. "
+                "Database usage: %s",
+                db_metrics.snapshot().summary(),
+            )
 
             await _subscriptions_changed.wait()
 
@@ -785,8 +789,10 @@ async def run_scoring_watcher() -> None:
             continue
 
         logger.info(
-            "Nothing due for %.1f min - sleeping until the next game starts",
+            "Nothing due for %.1f min - sleeping until the next game starts. "
+            "Database usage: %s",
             delay / 60,
+            db_metrics.snapshot().summary(),
         )
 
         # Interruptible: subscribing to a game that starts shortly must not
