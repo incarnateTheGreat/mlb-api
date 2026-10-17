@@ -66,6 +66,14 @@ class ScheduleMixin:
         answers every pending game in ONE request, and `fields` trims the
         response from ~1.6KB per game to ~140 bytes.
         
+        A postponed game keeps its gamePk and is listed TWICE - once on the
+        original date and once on the make-up date - so the response cannot be
+        collapsed by gamePk alone without the result depending on array order.
+        Observed live: 849817 appeared as both a rained-out Oct 17 entry and a
+        rescheduled Oct 18 one. Picking the wrong one tells the watcher a game
+        started in the past, which makes it poll continuously until the real
+        first pitch. Abandoned dates are therefore discarded explicitly.
+        
         Games the schedule does not return are simply absent from the result;
         the caller decides what an unknown start time means.
         """
@@ -76,19 +84,40 @@ class ScheduleMixin:
             "/schedule",
             params={
                 "gamePks": ",".join(str(game_id) for game_id in game_ids),
-                "fields": "dates,games,gamePk,gameDate",
+                "fields": "dates,games,gamePk,gameDate,status,codedGameState",
             },
         )
         
-        starts: dict[int, str] = {}
+        # gamePk -> candidate start times, split by whether that date still
+        # stands. Postponed ("D") and cancelled ("C") entries are only used
+        # when nothing else is on offer.
+        playable: dict[int, list[str]] = {}
+        abandoned: dict[int, list[str]] = {}
         
         for date_entry in data.get("dates", []) or []:
             for game in date_entry.get("games", []) or []:
                 game_pk = game.get("gamePk")
                 game_date = game.get("gameDate")
                 
-                if game_pk is not None and game_date:
-                    starts[game_pk] = game_date
+                if game_pk is None or not game_date:
+                    continue
+                
+                coded = (game.get("status") or {}).get("codedGameState")
+                bucket = abandoned if coded in ("D", "C") else playable
+                
+                bucket.setdefault(game_pk, []).append(game_date)
+        
+        starts: dict[int, str] = {}
+        
+        for game_pk in set(playable) | set(abandoned):
+            # Earliest of the dates still standing, so a game is polled too
+            # early rather than slept through. Falls back to the abandoned
+            # date when a postponement has no make-up date yet, which at least
+            # keeps the game known rather than unknown.
+            candidates = playable.get(game_pk) or abandoned.get(game_pk) or []
+            
+            if candidates:
+                starts[game_pk] = min(candidates)
         
         return starts
     

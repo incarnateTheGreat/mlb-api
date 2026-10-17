@@ -1611,3 +1611,159 @@ class TestWatcherWaitsForFirstPitch:
         assert due == []
         assert next_start is not None
         assert next_start.tzinfo is not None
+
+
+class TestPostponedGameStartTimes:
+    """A postponed game keeps its gamePk and gains a second schedule entry.
+
+    Seen live when TB @ CLE 849817 was rained out: the schedule returned the
+    abandoned Oct 17 date AND the Oct 18 make-up under the same gamePk.
+    Collapsing those by gamePk makes the answer depend on array order, and
+    choosing the abandoned date puts first pitch in the past - which the
+    watcher reads as "already started" and polls against until the real game.
+    """
+
+    def _client_returning(self, dates):
+        """A ScheduleMixin bound to a canned /schedule response."""
+        from app.services.mlb_client.schedule import ScheduleMixin
+
+        client = ScheduleMixin()
+        client._get = AsyncMock(return_value={"dates": dates})
+
+        return client
+
+    @pytest.mark.asyncio
+    async def test_the_make_up_date_wins_over_the_rained_out_one(self):
+        """The exact shape statsapi returned for the rained-out 849817."""
+        client = self._client_returning(
+            [
+                {
+                    "games": [
+                        {
+                            "gamePk": 849817,
+                            "gameDate": "2026-10-17T00:00:00Z",
+                            "status": {"codedGameState": "D"},
+                        }
+                    ]
+                },
+                {
+                    "games": [
+                        {
+                            "gamePk": 849817,
+                            "gameDate": "2026-10-18T21:00:00Z",
+                            "status": {"codedGameState": "S"},
+                        }
+                    ]
+                },
+            ]
+        )
+
+        starts = await client.get_game_start_times([849817])
+
+        assert starts == {849817: "2026-10-18T21:00:00Z"}
+
+    @pytest.mark.asyncio
+    async def test_order_does_not_decide_the_answer(self):
+        """Same two entries reversed must give the same start time."""
+        client = self._client_returning(
+            [
+                {
+                    "games": [
+                        {
+                            "gamePk": 849817,
+                            "gameDate": "2026-10-18T21:00:00Z",
+                            "status": {"codedGameState": "S"},
+                        }
+                    ]
+                },
+                {
+                    "games": [
+                        {
+                            "gamePk": 849817,
+                            "gameDate": "2026-10-17T00:00:00Z",
+                            "status": {"codedGameState": "D"},
+                        }
+                    ]
+                },
+            ]
+        )
+
+        starts = await client.get_game_start_times([849817])
+
+        assert starts == {849817: "2026-10-18T21:00:00Z"}
+
+    @pytest.mark.asyncio
+    async def test_a_postponement_with_no_make_up_date_is_still_reported(self):
+        """Better a known stale date than an unknown one, which polls."""
+        client = self._client_returning(
+            [
+                {
+                    "games": [
+                        {
+                            "gamePk": 849817,
+                            "gameDate": "2026-10-17T00:00:00Z",
+                            "status": {"codedGameState": "D"},
+                        }
+                    ]
+                }
+            ]
+        )
+
+        starts = await client.get_game_start_times([849817])
+
+        assert starts == {849817: "2026-10-17T00:00:00Z"}
+
+    @pytest.mark.asyncio
+    async def test_an_ordinary_game_is_unaffected(self):
+        """The common case must not be disturbed by the postponement handling."""
+        client = self._client_returning(
+            [
+                {
+                    "games": [
+                        {
+                            "gamePk": 849816,
+                            "gameDate": "2026-10-18T00:00:00Z",
+                            "status": {"codedGameState": "S"},
+                        }
+                    ]
+                }
+            ]
+        )
+
+        starts = await client.get_game_start_times([849816])
+
+        assert starts == {849816: "2026-10-18T00:00:00Z"}
+
+    @pytest.mark.asyncio
+    async def test_no_games_means_no_request(self):
+        """An empty subscription set must not hit statsapi at all."""
+        client = self._client_returning([])
+
+        assert await client.get_game_start_times([]) == {}
+        client._get.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_a_doubleheader_takes_the_earlier_game(self):
+        """Two playable dates: poll from the earlier, never sleep past it."""
+        client = self._client_returning(
+            [
+                {
+                    "games": [
+                        {
+                            "gamePk": 849817,
+                            "gameDate": "2026-10-18T21:00:00Z",
+                            "status": {"codedGameState": "S"},
+                        },
+                        {
+                            "gamePk": 849817,
+                            "gameDate": "2026-10-18T17:00:00Z",
+                            "status": {"codedGameState": "S"},
+                        },
+                    ]
+                }
+            ]
+        )
+
+        starts = await client.get_game_start_times([849817])
+
+        assert starts == {849817: "2026-10-18T17:00:00Z"}
