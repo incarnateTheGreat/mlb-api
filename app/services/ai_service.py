@@ -26,12 +26,17 @@ class AIService:
     """
     
     def __init__(self) -> None:
-        api_key = get_settings().anthropic_api_key
-        if not api_key:
-            raise ValueError("ANTHROPIC_API_KEY is required to use AIService")
-
-        self.client = anthropic.Anthropic(api_key=api_key)
+        self._api_key = get_settings().anthropic_api_key
+        self.client: Optional[anthropic.Anthropic] = None
         self.model = "claude-sonnet-4-20250514"
+
+    def _get_client(self) -> anthropic.Anthropic:
+        """Build Anthropic client on first use so non-AI routes can initialize."""
+        if self.client is None:
+            if not self._api_key:
+                raise ValueError("ANTHROPIC_API_KEY is required to use AIService")
+            self.client = anthropic.Anthropic(api_key=self._api_key)
+        return self.client
     
     async def generate_game_summary(
         self,
@@ -65,7 +70,7 @@ IMPORTANT: Return ONLY valid JSON, no markdown code blocks or extra text."""
         # Note: The Anthropic Python SDK's create() is synchronous, but we
         # can wrap it for our async context. For true async, you'd use
         # anthropic.AsyncAnthropic (similar to axios vs fetch patterns).
-        message = self.client.messages.create(
+        message = self._get_client().messages.create(
             model=self.model,
             max_tokens=max_tokens,
             temperature=temperature,
@@ -171,7 +176,7 @@ Respond with a JSON object containing:
 
 IMPORTANT: Return ONLY valid JSON, no markdown code blocks or extra text."""
 
-        message = self.client.messages.create(
+        message = self._get_client().messages.create(
             model=self.model,
             max_tokens=max_tokens,
             temperature=temperature,
@@ -251,7 +256,7 @@ Write a 3-4 paragraph scouting report covering:
 
 Write in a professional scouting report style. Be specific and analytical."""
 
-        message = self.client.messages.create(
+        message = self._get_client().messages.create(
             model=self.model,
             max_tokens=max_tokens,
             temperature=temperature,
