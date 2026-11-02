@@ -26,7 +26,11 @@ class AIService:
     """
     
     def __init__(self) -> None:
-        self.client = anthropic.Anthropic(api_key=get_settings().anthropic_api_key)
+        api_key = get_settings().anthropic_api_key
+        if not api_key:
+            raise ValueError("ANTHROPIC_API_KEY is required to use AIService")
+
+        self.client = anthropic.Anthropic(api_key=api_key)
         self.model = "claude-sonnet-4-20250514"
     
     async def generate_game_summary(

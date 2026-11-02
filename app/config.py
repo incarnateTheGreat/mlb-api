@@ -22,7 +22,7 @@ class Settings(BaseSettings):
     database_url: str
     
     # External APIs
-    anthropic_api_key: str
+    anthropic_api_key: str | None = None
     mlb_stats_api_base_url: str = "https://statsapi.mlb.com/api/v1"
     mlb_stats_api_live_url: str = "https://ws.statsapi.mlb.com/api/v1.1"
     
