@@ -152,3 +152,19 @@ class GameContent(BaseModel):
     videoContent: list[GameVideo] = Field(default_factory=list)
     recap_article: Optional[GameArticle] = None
     related_articles: list[GameArticle] = Field(default_factory=list)
+
+
+class AllStarGameItem(BaseModel):
+    """Minimal All-Star game row for frontend listing pages."""
+
+    gamePk: int
+    officialDate: str
+    result: str
+    pitchers: Optional[str] = None
+    location: Optional[str] = None
+
+
+class AllStarGamesResponse(BaseModel):
+    """All-Star games list response."""
+
+    games: list[AllStarGameItem] = Field(default_factory=list)

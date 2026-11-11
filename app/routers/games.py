@@ -14,6 +14,8 @@ Key concepts for the TS developer:
 
 from typing import Annotated, Optional
 from datetime import date as date_type
+import asyncio
+import time
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -30,10 +32,176 @@ from app.services.memory_cache import (
     get_cached_game_feed_bytes,
     cache_game_feed_bytes,
 )
-from app.models.game import GameBoxscore, GameSummary, GameContent
+from app.models.game import (
+    GameBoxscore,
+    GameSummary,
+    GameContent,
+    AllStarGameItem,
+    AllStarGamesResponse,
+)
 from app.utils import process_schedule_response
 
 router = APIRouter()
+
+ALL_STAR_CACHE_TTL_SECONDS = 60 * 60 * 24 * 270  # 270 days
+ALL_STAR_CACHE_CONTROL = (
+    f"public, max-age={ALL_STAR_CACHE_TTL_SECONDS}, "
+    f"s-maxage={ALL_STAR_CACHE_TTL_SECONDS}, stale-while-revalidate=86400"
+)
+
+_all_star_cache: AllStarGamesResponse | None = None
+_all_star_cache_expires_at: float = 0.0
+_all_star_cache_lock = asyncio.Lock()
+
+
+def _format_all_star_result(game: dict) -> str:
+    status = (game.get("status") or {}).get("detailedState")
+
+    away = (game.get("teams") or {}).get("away") or {}
+    home = (game.get("teams") or {}).get("home") or {}
+
+    away_team_name = ((away.get("team") or {}).get("name") or "Away").strip()
+    home_team_name = ((home.get("team") or {}).get("name") or "Home").strip()
+
+    away_score = away.get("score")
+    home_score = home.get("score")
+
+    if isinstance(away_score, int) and isinstance(home_score, int):
+        return f"{away_team_name} {away_score}-{home_score} {home_team_name}"
+
+    if isinstance(status, str) and status.strip():
+        return status.strip()
+
+    return "Result unavailable"
+
+
+def _format_all_star_pitchers(game: dict) -> str | None:
+    decisions = game.get("decisions") or {}
+
+    winner = decisions.get("winner") or {}
+    loser = decisions.get("loser") or {}
+    save = decisions.get("save") or {}
+
+    parts: list[str] = []
+
+    winner_name = winner.get("fullName")
+    winner_record = winner.get("record")
+    if isinstance(winner_name, str) and winner_name.strip():
+        winner_text = f"W: {winner_name.strip()}"
+        if isinstance(winner_record, str) and winner_record.strip():
+            winner_text += f" ({winner_record.strip()})"
+        parts.append(winner_text)
+
+    loser_name = loser.get("fullName")
+    loser_record = loser.get("record")
+    if isinstance(loser_name, str) and loser_name.strip():
+        loser_text = f"L: {loser_name.strip()}"
+        if isinstance(loser_record, str) and loser_record.strip():
+            loser_text += f" ({loser_record.strip()})"
+        parts.append(loser_text)
+
+    save_name = save.get("fullName")
+    save_record = save.get("record")
+    if isinstance(save_name, str) and save_name.strip():
+        save_text = f"SV: {save_name.strip()}"
+        if isinstance(save_record, str) and save_record.strip():
+            save_text += f" ({save_record.strip()})"
+        parts.append(save_text)
+
+    if not parts:
+        return None
+
+    return " | ".join(parts)
+
+
+def _format_all_star_location(game: dict) -> str | None:
+    venue = game.get("venue") or {}
+    venue_name = venue.get("name")
+    location = venue.get("location") or {}
+    city = location.get("city")
+
+    if not isinstance(venue_name, str) or not venue_name.strip():
+        return None
+
+    cleaned_venue = venue_name.strip()
+
+    if isinstance(city, str) and city.strip():
+        cleaned_city = city.strip()
+        return f"{cleaned_venue} ({cleaned_city})"
+
+    return cleaned_venue
+
+
+@router.get("/all-star", response_model=AllStarGamesResponse)
+async def get_all_star_games(
+    response: Response,
+    mlb_client: Annotated[MLBStatsClient, Depends(get_mlb_client)],
+) -> AllStarGamesResponse:
+    """
+    Get historical MLB All-Star games.
+
+    Returns a minimal contract for frontend table views:
+    gamePk, officialDate, result, pitchers, and location.
+    """
+    global _all_star_cache, _all_star_cache_expires_at
+
+    now = time.monotonic()
+    cached = _all_star_cache
+    if cached is not None and now < _all_star_cache_expires_at:
+        response.headers["Cache-Control"] = ALL_STAR_CACHE_CONTROL
+        response.headers["X-Cache"] = "HIT"
+        return cached
+
+    async with _all_star_cache_lock:
+        now = time.monotonic()
+        cached = _all_star_cache
+        if cached is not None and now < _all_star_cache_expires_at:
+            response.headers["Cache-Control"] = ALL_STAR_CACHE_CONTROL
+            response.headers["X-Cache"] = "HIT"
+            return cached
+
+        try:
+            data = await mlb_client.get_all_star_games_schedule()
+        except Exception as e:
+            raise HTTPException(
+                status_code=500,
+                detail=f"Failed to fetch All-Star games: {str(e)}",
+            )
+
+        games: list[AllStarGameItem] = []
+
+        for date_entry in data.get("dates", []) or []:
+            default_date = date_entry.get("date")
+
+            for game in date_entry.get("games", []) or []:
+                game_pk = game.get("gamePk")
+                official_date = game.get("officialDate") or default_date
+
+                if not isinstance(game_pk, int):
+                    continue
+
+                if not isinstance(official_date, str) or not official_date:
+                    continue
+
+                games.append(
+                    AllStarGameItem(
+                        gamePk=game_pk,
+                        officialDate=official_date,
+                        result=_format_all_star_result(game),
+                        pitchers=_format_all_star_pitchers(game),
+                        location=_format_all_star_location(game),
+                    )
+                )
+
+        games.sort(key=lambda item: item.officialDate, reverse=True)
+
+        payload = AllStarGamesResponse(games=games)
+        _all_star_cache = payload
+        _all_star_cache_expires_at = time.monotonic() + ALL_STAR_CACHE_TTL_SECONDS
+
+    response.headers["Cache-Control"] = ALL_STAR_CACHE_CONTROL
+    response.headers["X-Cache"] = "MISS"
+    return payload
 
 
 @router.get("/{game_id}/feed")

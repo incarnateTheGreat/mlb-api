@@ -107,6 +107,23 @@ Make sure you've activated the virtual environment: `source venv/bin/activate`
 | GET    | `/games/{game_id}/boxscore` | Raw boxscore data         |
 | GET    | `/games/{game_id}/summary`  | AI-generated game summary |
 | GET    | `/games/schedule`           | Game schedule by date     |
+| GET    | `/games/all-star`           | Historical All-Star games |
+
+`GET /games/all-star` returns a minimal payload for listing pages:
+
+```json
+{
+  "games": [
+    {
+      "gamePk": 747805,
+      "officialDate": "2024-07-16",
+      "result": "American League 5-3 National League",
+      "pitchers": "W: Tanner Houck (1-0) | L: Shota Imanaga (0-1) | SV: Emmanuel Clase (1)",
+      "location": "Globe Life Field (Arlington)"
+    }
+  ]
+}
+```
 
 ### Players
 

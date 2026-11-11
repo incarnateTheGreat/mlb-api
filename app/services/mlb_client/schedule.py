@@ -4,6 +4,7 @@ Schedule-related MLB API endpoints.
 Handles game schedules and game details.
 """
 
+import asyncio
 from datetime import date
 from typing import Any, Optional
 
@@ -151,3 +152,45 @@ class ScheduleMixin:
             params["fields"] = fields
         
         return await self._get("/schedule", params=params)
+
+    async def get_all_star_games_schedule(self) -> dict[str, Any]:
+        """
+        Fetch all historical All-Star games from MLB schedule API.
+
+        Returns only the fields needed to produce the frontend contract:
+        gamePk, officialDate, result, pitchers, and location.
+        """
+        # MLB schedule API currently returns only the first historical All-Star
+        # game when queried with a broad startDate/endDate range and gameType=A.
+        # Fetching each season individually avoids that truncation.
+        current_year = date.today().year
+
+        async def fetch_season(season: int) -> dict[str, Any]:
+            params = {
+                "sportId": 1,
+                "gameType": "A",
+                "season": season,
+                "language": "en",
+                "hydrate": "decisions,venue(location)",
+                "fields": "dates,date,games,gamePk,officialDate,status,detailedState,teams,away,home,score,team,name,venue,name,location,city,decisions,winner,loser,save,fullName,record",
+            }
+
+            return await self._get("/schedule", params=params)
+
+        season_tasks = [
+            fetch_season(season) for season in range(1933, current_year + 1)
+        ]
+        season_payloads = await asyncio.gather(*season_tasks)
+
+        dates: list[dict[str, Any]] = []
+
+        for payload in season_payloads:
+            season_dates = payload.get("dates", []) or []
+            dates.extend(season_dates)
+
+        return {
+            "totalGames": sum(
+                len((date_entry.get("games", []) or [])) for date_entry in dates
+            ),
+            "dates": dates,
+        }

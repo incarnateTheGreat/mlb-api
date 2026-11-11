@@ -13,6 +13,8 @@ from fastapi.testclient import TestClient
 
 from app.main import app
 from app.services.mlb_client import MLBStatsClient
+from app.services.mlb_client import get_mlb_client
+from app.routers import games as games_router
 
 
 client = TestClient(app)
@@ -73,6 +75,158 @@ class TestScheduleRangeEndpoint:
         response = client.get("/games/schedule/range")
         
         assert response.status_code == 422
+
+
+# =============================================================================
+# All-Star games endpoint tests
+# =============================================================================
+
+class TestAllStarGamesEndpoint:
+    """Tests for /games/all-star endpoint."""
+
+    @pytest.fixture(autouse=True)
+    def _reset_all_star_cache(self):
+        games_router._all_star_cache = None
+        games_router._all_star_cache_expires_at = 0.0
+        yield
+        games_router._all_star_cache = None
+        games_router._all_star_cache_expires_at = 0.0
+
+    def test_all_star_games_returns_expected_shape(self):
+        """Should return minimal list rows consumable by frontend route."""
+
+        class MockMLBClient:
+            async def get_all_star_games_schedule(self):
+                return {
+                    "dates": [
+                        {
+                            "date": "2024-07-16",
+                            "games": [
+                                {
+                                    "gamePk": 123,
+                                    "officialDate": "2024-07-16",
+                                    "status": {"detailedState": "Final"},
+                                    "venue": {
+                                        "name": "Globe Life Field",
+                                        "location": {
+                                            "city": "Arlington",
+                                        },
+                                    },
+                                    "decisions": {
+                                        "winner": {
+                                            "fullName": "Pitcher One",
+                                            "record": "1-0",
+                                        },
+                                        "loser": {
+                                            "fullName": "Pitcher Two",
+                                            "record": "0-1",
+                                        },
+                                        "save": {
+                                            "fullName": "Pitcher Three",
+                                            "record": "1",
+                                        },
+                                    },
+                                    "teams": {
+                                        "away": {
+                                            "team": {"name": "American League"},
+                                            "score": 5,
+                                        },
+                                        "home": {
+                                            "team": {"name": "National League"},
+                                            "score": 3,
+                                        },
+                                    },
+                                }
+                            ],
+                        }
+                    ]
+                }
+
+        app.dependency_overrides[get_mlb_client] = lambda: MockMLBClient()
+
+        try:
+            response = client.get("/games/all-star")
+        finally:
+            app.dependency_overrides.pop(get_mlb_client, None)
+
+        assert response.status_code == 200
+        payload = response.json()
+        assert response.headers.get("x-cache") == "MISS"
+        assert "max-age=" in response.headers.get("cache-control", "")
+
+        assert "games" in payload
+        assert isinstance(payload["games"], list)
+        assert payload["games"][0] == {
+            "gamePk": 123,
+            "officialDate": "2024-07-16",
+            "result": "American League 5-3 National League",
+            "pitchers": "W: Pitcher One (1-0) | L: Pitcher Two (0-1) | SV: Pitcher Three (1)",
+            "location": "Globe Life Field (Arlington)",
+        }
+
+    def test_all_star_games_handles_upstream_failure(self):
+        """Should surface a 500 when upstream MLB fetch fails."""
+
+        class FailingMLBClient:
+            async def get_all_star_games_schedule(self):
+                raise RuntimeError("upstream unavailable")
+
+        app.dependency_overrides[get_mlb_client] = lambda: FailingMLBClient()
+
+        try:
+            response = client.get("/games/all-star")
+        finally:
+            app.dependency_overrides.pop(get_mlb_client, None)
+
+        assert response.status_code == 500
+        assert "Failed to fetch All-Star games" in response.json()["detail"]
+
+    def test_all_star_games_uses_in_memory_cache_on_second_request(self):
+        """Should fetch once and serve subsequent request from cache within TTL."""
+
+        mock_client = MagicMock()
+        mock_client.get_all_star_games_schedule = AsyncMock(
+            return_value={
+                "dates": [
+                    {
+                        "date": "2024-07-16",
+                        "games": [
+                            {
+                                "gamePk": 123,
+                                "officialDate": "2024-07-16",
+                                "status": {"detailedState": "Final"},
+                                "teams": {
+                                    "away": {
+                                        "team": {"name": "American League"},
+                                        "score": 5,
+                                    },
+                                    "home": {
+                                        "team": {"name": "National League"},
+                                        "score": 3,
+                                    },
+                                },
+                            }
+                        ],
+                    }
+                ]
+            }
+        )
+
+        app.dependency_overrides[get_mlb_client] = lambda: mock_client
+
+        try:
+            first = client.get("/games/all-star")
+            second = client.get("/games/all-star")
+        finally:
+            app.dependency_overrides.pop(get_mlb_client, None)
+
+        assert first.status_code == 200
+        assert second.status_code == 200
+        assert first.headers.get("x-cache") == "MISS"
+        assert second.headers.get("x-cache") == "HIT"
+        assert "max-age=" in first.headers.get("cache-control", "")
+        assert "max-age=" in second.headers.get("cache-control", "")
+        assert mock_client.get_all_star_games_schedule.await_count == 1
 
 
 # =============================================================================
