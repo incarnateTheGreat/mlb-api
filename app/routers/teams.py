@@ -20,6 +20,7 @@ from app.utils import (
     build_game_log_record_map,
     process_team_schedule,
 )
+from app.models.contracts import TeamDetailedResponseContract
 
 
 router = APIRouter()
@@ -80,7 +81,7 @@ async def get_team_info(
         )
 
 
-@router.get("/{team_slug}/detailed")
+@router.get("/{team_slug}/detailed", response_model=TeamDetailedResponseContract)
 async def get_team_detailed(
     team_slug: Annotated[str, Path(description="Team slug (e.g., 'bluejays')")],
     roster_type: Annotated[str, Query(description="Roster type")] = "fullSeason",

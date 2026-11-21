@@ -31,3 +31,14 @@ jobs:
                   DATABASE_URL: ${{ secrets.DATABASE_URL }}
                   ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
                   PYTHONWARNINGS: "ignore:Unverified HTTPS request"
+
+            - name: Export OpenAPI schema
+              run: |
+                  python scripts/export_openapi.py
+
+            - name: Upload OpenAPI artifact
+              uses: actions/upload-artifact@v4
+              with:
+                  name: openapi-schema
+                  path: openapi.json
+                  retention-days: 7

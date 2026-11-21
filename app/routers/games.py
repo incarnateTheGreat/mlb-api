@@ -39,6 +39,11 @@ from app.models.game import (
     AllStarGameItem,
     AllStarGamesResponse,
 )
+from app.models.contracts import (
+    DailyScheduleResponseContract,
+    ScheduleRangeResponseContract,
+    ScheduleRawResponseContract,
+)
 from app.utils import process_schedule_response
 
 router = APIRouter()
@@ -379,7 +384,7 @@ async def get_game_summary(
     return summary
 
 
-@router.get("/schedule")
+@router.get("/schedule", response_model=DailyScheduleResponseContract)
 async def get_schedule(
     time_zone: str,
     date: Annotated[Optional[date_type], Query(description="Date in YYYY-MM-DD format (defaults to today)")] = None,
@@ -402,7 +407,7 @@ async def get_schedule(
         )
 
 
-@router.get("/schedule/raw")
+@router.get("/schedule/raw", response_model=ScheduleRawResponseContract)
 async def get_schedule_raw(
     time_zone: str,
     date: Annotated[Optional[date_type], Query(description="Date in YYYY-MM-DD format (defaults to today)")] = None,
@@ -422,7 +427,7 @@ async def get_schedule_raw(
         )
 
 
-@router.get("/schedule/range")
+@router.get("/schedule/range", response_model=ScheduleRangeResponseContract)
 async def get_schedule_range(
     start_date: Annotated[date_type, Query(description="Start date in YYYY-MM-DD format")],
     end_date: Annotated[date_type, Query(description="End date in YYYY-MM-DD format")],

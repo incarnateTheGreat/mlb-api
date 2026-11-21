@@ -9,6 +9,7 @@ from fastapi import APIRouter, Depends, Query
 
 from app.services.mlb_client import get_mlb_client, MLBStatsClient, StandingsView
 from app.services.sabermetrics import calculate_pythagorean_record
+from app.models.contracts import StandingsResponseContract
 
 
 router = APIRouter()
@@ -159,7 +160,7 @@ def process_wildcard_standings(response: dict) -> dict[str, Any]:
     return result
 
 
-@router.get("")
+@router.get("", response_model=StandingsResponseContract)
 async def get_standings(
     mlb_client: Annotated[MLBStatsClient, Depends(get_mlb_client)],
     year: Annotated[Optional[int], Query(ge=1900, le=2100)] = None,
