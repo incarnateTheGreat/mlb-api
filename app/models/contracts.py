@@ -35,7 +35,7 @@ class ScheduleRawResponseContract(ContractModel):
 
 
 class StandingsResponseContract(ContractModel):
-    standingsData: dict[str, Any]
+    standingsData: dict[str, Any] | list[Any]
     year: int
     lastUpdated: str
 

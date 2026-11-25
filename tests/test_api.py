@@ -248,6 +248,76 @@ class TestStandingsEndpoint:
         
         assert response.status_code == 422  # Above le=2100
 
+    def test_standings_mlb_view_returns_flat_team_records(self):
+        """view=mlb should return standingsData as a flat team-record list."""
+
+        class MockMLBClient:
+            async def get_standings(self, year: int, view):
+                return {
+                    "lastUpdated": "2026-11-25T00:00:00Z",
+                    "records": [
+                        {
+                            "teamRecords": [
+                                {
+                                    "id": "141",
+                                    "name": "Toronto Blue Jays",
+                                    "wins": 94,
+                                    "losses": 68,
+                                    "runsScored": 798,
+                                    "runsAllowed": 721,
+                                }
+                            ]
+                        }
+                    ],
+                }
+
+        app.dependency_overrides[get_mlb_client] = lambda: MockMLBClient()
+
+        try:
+            response = client.get("/standings?year=2025&view=mlb")
+        finally:
+            app.dependency_overrides.pop(get_mlb_client, None)
+
+        assert response.status_code == 200
+        data = response.json()
+        assert isinstance(data["standingsData"], list)
+        assert data["standingsData"][0]["name"] == "Toronto Blue Jays"
+
+    def test_standings_preseason_view_returns_flat_team_records(self):
+        """view=preseason should return standingsData as a flat team-record list."""
+
+        class MockMLBClient:
+            async def get_standings(self, year: int, view):
+                return {
+                    "lastUpdated": "2026-11-25T00:00:00Z",
+                    "records": [
+                        {
+                            "teamRecords": [
+                                {
+                                    "id": "147",
+                                    "name": "New York Yankees",
+                                    "wins": 20,
+                                    "losses": 10,
+                                    "runsScored": 120,
+                                    "runsAllowed": 88,
+                                }
+                            ]
+                        }
+                    ],
+                }
+
+        app.dependency_overrides[get_mlb_client] = lambda: MockMLBClient()
+
+        try:
+            response = client.get("/standings?year=2025&view=preseason")
+        finally:
+            app.dependency_overrides.pop(get_mlb_client, None)
+
+        assert response.status_code == 200
+        data = response.json()
+        assert isinstance(data["standingsData"], list)
+        assert data["standingsData"][0]["name"] == "New York Yankees"
+
 
 # =============================================================================
 # Matchups endpoint tests
